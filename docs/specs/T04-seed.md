@@ -1,50 +1,106 @@
-# T04 시드 데이터 · 테스트 DB 헬퍼
+# T04 시드 데이터
 
 ## 목표
 
-`architecture.md` 부록 C의 시드(책 9권 · 시간표 블록 10개 · 과제 27건)를 넣고, 이후 모든 통합 테스트가 쓸 격리된 임시 DB 헬퍼를 만든다.
+`architecture.md` 부록 C의 시드(책 9권 · 시간표 블록 10건 · 과제 27건)를 **기존 사용자 데이터를 훼손하지 않고** 넣고, 표 전체가 정확히 재현되는지 exact match로 검증한다.
 
 ## 선행 태스크
 
 T03
+
+T03은 T02를, T02는 T01을 선행으로 갖는다. 따라서 T04는 **T01·T02·T03을 전이적으로 포함한다** (DR-08). 구체적으로 T04는 아래를 전제한다.
+
+| 전제 | 제공 태스크 |
+|---|---|
+| `vitest` 의존성, `test` 스크립트, `vitest.config.ts`, `tests/` 배치 규약 | T02 |
+| `prisma/schema.prisma`, 마이그레이션, `createPrismaClient`, `enableWal` | T03 |
+| `tests/helpers/db.ts`의 `createTestDb` / `cleanupAllTestDbs` | T03 |
+| `db:deploy` / `db:wal` / `db:setup` 스크립트, `EXPECTED_DB_URL_SCRIPTS` | T03 |
+
+## 구현 순서상의 위치
+
+**T01 → T02 → T03 → T04.** T04 브랜치는 **T03이 `main`에 Merge된 뒤에** 만든다. T04는 T03의 `db:setup`과 T03의 `src/server/prisma.test.ts`를 수정하므로, 두 선행 결과가 모두 Merge된 뒤에만 파일 범위가 성립한다.
 
 ## 변경 대상 파일
 
 생성:
 
 - `prisma/seed.ts`
-- `tests/helpers/db.ts`
+- `tests/fixtures/seed-expected.ts`
 - `tests/integration/seed.test.ts`
 
 수정:
 
 - `package.json`
-- `vitest.config.ts`
-- `.gitignore`
+- `src/server/prisma.test.ts`
 
-**이 목록 밖의 파일은 생성·수정하지 않는다.** 새 의존성을 추가하지 않으므로 `package-lock.json`은 바뀌지 않는다.
+**이 목록 밖의 파일은 생성·수정하지 않는다.** 새 의존성을 추가하지 않으므로 `package-lock.json`은 바뀌지 않는다. `tests/helpers/db.ts`는 **사용만 하고 수정하지 않는다** (T03 소관).
 
 ## 구현 요구사항
 
-### A. 시드 (`prisma/seed.ts`)
+### A. 시드 함수 (`prisma/seed.ts`)
 
-1. 파일은 **함수를 export 하고**, 그 함수를 부르는 `main()`을 함께 둔다. 통합 테스트가 프로세스를 띄우지 않고 함수를 직접 부를 수 있어야 한다.
+1. 파일은 함수를 export 하고, 그 함수를 부르는 `main()`을 함께 둔다. 통합 테스트가 프로세스를 띄우지 않고 함수를 직접 부를 수 있어야 한다.
 
 ```ts
 export interface SeedResult {
-  books: number;        // upsert된 책 수
+  books: number;        // upsert된 책 수 (항상 9)
   blocks: number;       // 생성된 블록 수 (건너뛰었으면 0)
   assignments: number;  // 생성된 과제 수 (건너뛰었으면 0)
   skipped: { blocks: boolean; assignments: boolean };
 }
 
-export async function seed(
-  client: PrismaClient,
-  options: { force?: boolean } = {},
-): Promise<SeedResult>;
+export interface SeedOptions {
+  force?: boolean;
+  /**
+   * 트랜잭션 안에서 삭제 직후·생성 직전에 호출된다.
+   * 롤백을 결정적으로 검증하기 위한 테스트 전용 seam이며 프로덕션 경로는 넘기지 않는다.
+   */
+  beforeCreateHook?: () => Promise<void> | void;
+}
+
+export async function seed(client: PrismaClient, options?: SeedOptions): Promise<SeedResult>;
 ```
 
-2. **책(`Book`)은 항상 `title` 기준 upsert 한다** (D4의 find-or-create). 같은 책이 여러 날에 나오므로 제목당 정확히 1건이어야 진도 체인(F1)이 이어진다.
+2. **전체를 하나의 `$transaction`으로 감싼다** (DR-10). 중간에 실패하면 아무 변경도 남지 않아야 한다. 트랜잭션 안의 순서는 정확히 아래와 같다.
+
+```
+$transaction(async (tx) => {
+  1. Book 9권을 title 기준 upsert         (create: 시드값, update: {})
+  2. force면  tx.assignment.deleteMany()  →  tx.scheduleBlock.deleteMany()
+  3. beforeCreateHook?.()                 (있으면 호출)
+  4. tx.scheduleBlock.count() === 0 이면 블록 10건 생성, 아니면 skipped.blocks = true
+  5. tx.assignment.count() === 0  이면 과제 27건 생성, 아니면 skipped.assignments = true
+}, { maxWait: 10_000, timeout: 30_000 })
+```
+
+3. **`update: {}`가 Book 정책의 핵심이다** (DR-10). 이미 있는 책의 `language`·`progressUnit`·`totalUnits`·`archivedAt`을 시드값으로 **덮어쓰지 않는다.** 부모가 관리 화면(§6.2-5)에서 단위를 고치거나 책을 보관해 둔 상태에서 시드를 다시 돌려도 그 편집이 살아 있어야 한다.
+
+   - `@updatedAt` 컬럼은 빈 update로도 갱신될 수 있다. 이는 사용자 필드가 아니므로 허용하며, 보존 검증 대상에서 제외한다.
+
+4. **`force`는 `Book`에 아무 영향을 주지 않는다.** 삭제 대상은 `Assignment`와 `ScheduleBlock`뿐이다. 책을 지우면 지난 계획의 표시가 깨지고(D17), 진도 체인(F1)이 끊긴다.
+
+5. **재실행 정책.** 시드는 사용자 데이터를 지우지 않는 것이 기본이다.
+
+| 대상 | 기본 동작 | `force: true` |
+|---|---|---|
+| `Book` | 항상 title 기준 upsert (`update: {}`) | **동일. 삭제하지 않는다** |
+| `ScheduleBlock` | 기존 건수가 0일 때만 생성. 아니면 `skipped.blocks = true` | 전체 삭제 후 재생성 |
+| `Assignment` | 기존 건수가 0일 때만 생성. 아니면 `skipped.assignments = true` | 전체 삭제 후 재생성 |
+
+`force`는 환경변수 `SEED_FORCE === "1"`로도 켤 수 있다. `main()`이 이 값을 읽어 `seed(client, { force })`에 넘긴다.
+
+6. `main()`은 `createPrismaClient()`로 클라이언트를 만들고, 결과를 한 줄로 출력한 뒤 `$disconnect()` 한다. 예외가 나면 `process.exitCode = 1`.
+
+```
+seeded books=9 blocks=10 assignments=27 (skipped: blocks=false assignments=false)
+```
+
+7. 과제 생성 시 **책 제목 → id 매핑을 미리 만들어 둔다.** 과제마다 `findUnique`를 호출하지 않는다.
+
+### B. 시드 데이터
+
+8. **책(`Book`) 9권.** 항상 `title` 기준 upsert (D4의 find-or-create). 같은 책이 여러 날에 나오므로 제목당 정확히 1건이어야 진도 체인(F1)이 이어진다. `totalUnits`와 `archivedAt`은 전부 `null`이다.
 
 | # | title | language | progressUnit | 근거 |
 |---|---|---|---|---|
@@ -58,9 +114,7 @@ export async function seed(
 | 8 | `무지개 물고기` | `KO` | `CHAPTER` | 진도 표기 없음 |
 | 9 | `김방구 3` | `KO` | `CHAPTER` | **`3`은 제목의 일부다. 챕터로 파싱하지 말 것** |
 
-`totalUnits`와 `archivedAt`은 전부 `null`이다.
-
-3. **시간표 블록(`ScheduleBlock`) 10건**을 D11의 표 그대로 넣는다. 순서도 이 표와 같게 한다.
+9. **시간표 블록(`ScheduleBlock`) 10건.** D11의 표 그대로다. `label`의 가운뎃점은 `·`(U+00B7)이고 앰퍼샌드 앞뒤에 공백이 있다.
 
 | # | startMinute | endMinute | label | kind | matchType |
 |---|---|---|---|---|---|
@@ -75,188 +129,276 @@ export async function seed(
 | 9 | 840 | 900 | `한글책 읽기` | `STUDY` | `KOREAN_READING` |
 | 10 | 900 | 1020 | `영어숙제 끝내기` | `STUDY` | `WORKSHEET` |
 
-`label`의 가운뎃점은 `·`(U+00B7)이고 앰퍼샌드 앞뒤에 공백이 있다. 문자열을 그대로 옮긴다.
+10. **과제(`Assignment`) 27건.** §0.1의 실물 계획표에서 판독 가능한 항목 전부다. **모든 행의 `startUnit`은 `null`, `status`는 `PLANNED`, `completedAt`은 `null`이다.**
 
-4. **과제(`Assignment`) 27건**을 아래 표 그대로 넣는다. §0.1의 실물 계획표에서 판독 가능한 항목만이다.
-
-| date | orderIndex | type | book / title | endUnit |
-|---|---|---|---|---|
-| 2026-07-29 | 0 | `ENGLISH_READING` | Big Note | 6 |
-| 2026-07-29 | 1 | `DIARY` | `일기` | — |
-| 2026-07-30 | 0 | `ENGLISH_READING` | Big Note | 12 |
-| 2026-07-30 | 1 | `WORKSHEET` | `work sheet` | — |
-| 2026-07-31 | 0 | `KOREAN_READING` | 엄마 5분만 | `null` |
-| 2026-07-31 | 1 | `KOREAN_READING` | 무지개 물고기 | `null` |
-| 2026-08-01 | 0 | `ENGLISH_READING` | Kid Spy | 10 |
-| 2026-08-01 | 1 | `DIARY` | `일기` | — |
-| 2026-08-01 | 2 | `KOREAN_READING` | 김방구 3 | `null` |
-| 2026-08-02 | 0 | `ENGLISH_READING` | Kid Spy | 16 |
-| 2026-08-02 | 1 | `WORKSHEET` | `work sheet` | — |
-| 2026-08-04 | 0 | `ENGLISH_READING` | 13 Tree House | 7 |
-| 2026-08-04 | 1 | `DIARY` | `일기` | — |
-| 2026-08-05 | 0 | `ENGLISH_READING` | 13 Tree House | 13 |
-| 2026-08-05 | 1 | `WORKSHEET` | `work sheet` | — |
-| 2026-08-06 | 0 | `ENGLISH_READING` | Andrew Lost | `null` |
-| 2026-08-06 | 1 | `WORKSHEET` | `work sheet` | — |
-| 2026-08-07 | 0 | `DIARY` | `일기` | — |
-| 2026-08-08 | 0 | `ENGLISH_READING` | wimpy kid | 102 |
-| 2026-08-08 | 1 | `DIARY` | `일기` | — |
-| 2026-08-09 | 0 | `ENGLISH_READING` | wimpy kid | 217 |
-| 2026-08-09 | 1 | `WORKSHEET` | `work sheet` | — |
-| 2026-08-11 | 0 | `ENGLISH_READING` | Jake Drake Bully Buster | `null` |
-| 2026-08-11 | 1 | `DIARY` | `일기` | — |
-| 2026-08-12 | 0 | `ENGLISH_READING` | Jake Drake Bully Buster | `null` |
-| 2026-08-12 | 1 | `PROJECT` | `reading project` | — |
-| 2026-08-13 | 0 | `PROJECT` | `reading project` | — |
+| # | date | orderIndex | type | title | book | endUnit |
+|---|---|---|---|---|---|---|
+| 1 | 2026-07-29 | 0 | `ENGLISH_READING` | `null` | Big Note | 6 |
+| 2 | 2026-07-29 | 1 | `DIARY` | `일기` | `null` | `null` |
+| 3 | 2026-07-30 | 0 | `ENGLISH_READING` | `null` | Big Note | 12 |
+| 4 | 2026-07-30 | 1 | `WORKSHEET` | `work sheet` | `null` | `null` |
+| 5 | 2026-07-31 | 0 | `KOREAN_READING` | `null` | 엄마 5분만 | `null` |
+| 6 | 2026-07-31 | 1 | `KOREAN_READING` | `null` | 무지개 물고기 | `null` |
+| 7 | 2026-08-01 | 0 | `ENGLISH_READING` | `null` | Kid Spy | 10 |
+| 8 | 2026-08-01 | 1 | `DIARY` | `일기` | `null` | `null` |
+| 9 | 2026-08-01 | 2 | `KOREAN_READING` | `null` | 김방구 3 | `null` |
+| 10 | 2026-08-02 | 0 | `ENGLISH_READING` | `null` | Kid Spy | 16 |
+| 11 | 2026-08-02 | 1 | `WORKSHEET` | `work sheet` | `null` | `null` |
+| 12 | 2026-08-04 | 0 | `ENGLISH_READING` | `null` | 13 Tree House | 7 |
+| 13 | 2026-08-04 | 1 | `DIARY` | `일기` | `null` | `null` |
+| 14 | 2026-08-05 | 0 | `ENGLISH_READING` | `null` | 13 Tree House | 13 |
+| 15 | 2026-08-05 | 1 | `WORKSHEET` | `work sheet` | `null` | `null` |
+| 16 | 2026-08-06 | 0 | `ENGLISH_READING` | `null` | Andrew Lost | `null` |
+| 17 | 2026-08-06 | 1 | `WORKSHEET` | `work sheet` | `null` | `null` |
+| 18 | 2026-08-07 | 0 | `DIARY` | `일기` | `null` | `null` |
+| 19 | 2026-08-08 | 0 | `ENGLISH_READING` | `null` | wimpy kid | 102 |
+| 20 | 2026-08-08 | 1 | `DIARY` | `일기` | `null` | `null` |
+| 21 | 2026-08-09 | 0 | `ENGLISH_READING` | `null` | wimpy kid | 217 |
+| 22 | 2026-08-09 | 1 | `WORKSHEET` | `work sheet` | `null` | `null` |
+| 23 | 2026-08-11 | 0 | `ENGLISH_READING` | `null` | Jake Drake Bully Buster | `null` |
+| 24 | 2026-08-11 | 1 | `DIARY` | `일기` | `null` | `null` |
+| 25 | 2026-08-12 | 0 | `ENGLISH_READING` | `null` | Jake Drake Bully Buster | `null` |
+| 26 | 2026-08-12 | 1 | `PROJECT` | `reading project` | `null` | `null` |
+| 27 | 2026-08-13 | 0 | `PROJECT` | `reading project` | `null` | `null` |
 
 **2026-08-03, 08-10, 08-14 ~ 08-17에는 과제를 만들지 않는다.** 실물이 빈칸이다 (F7).
 
-5. 과제 필드 규칙:
-   - **읽기 유형**(`ENGLISH_READING` / `KOREAN_READING`): `bookId`는 해당 책, `title`은 `null` (§1.3 — 비면 책 제목을 쓴다), `endUnit`은 표의 값.
-   - **비읽기 유형**(`DIARY` / `WORKSHEET` / `PROJECT`): `title`은 표의 문자열, `bookId`·`startUnit`·`endUnit`은 전부 `null` (I2).
-   - **`startUnit`은 27건 전부 `null`** (D5 — 시작점은 실물에 없으므로 파생되게 둔다).
-   - `status`는 전부 `PLANNED`, `completedAt`은 `null`.
+11. 필드 규칙 요약:
+    - **읽기 유형**(`ENGLISH_READING` / `KOREAN_READING`): `bookId`는 해당 책, `title`은 `null` (§1.3 — 비면 책 제목을 쓴다).
+    - **비읽기 유형**(`DIARY` / `WORKSHEET` / `PROJECT`): `title`은 표의 문자열, `bookId`·`startUnit`·`endUnit`은 전부 `null` (I2).
+    - **`startUnit`은 27건 전부 `null`** (D5 — 시작점은 실물에 없으므로 파생되게 둔다).
 
-6. **7/29의 한글책(`김치찌…`)은 시드하지 않는다.** 사진에서 판독되지 않는다 (부록 C.2-1, Q2). 제목을 추측해 채우지 않는다 (CLAUDE.md). 그 결과 7/29의 `orderIndex`는 빈 자리 없이 `0, 1`이다.
+12. **7/29의 한글책(`김치찌…`)은 시드하지 않는다.** 사진에서 판독되지 않는다 (부록 C.2-1, Q2). 제목을 추측해 채우지 않는다 (CLAUDE.md). 그 결과 7/29의 `orderIndex`는 빈 자리 없이 `0, 1`이다.
 
-7. **재실행 안전성.** 시드는 사용자 데이터를 지우지 않는 것이 기본이다.
+### C. 기대 fixture (`tests/fixtures/seed-expected.ts`)
 
-| 대상 | 기본 동작 | `force: true` |
-|---|---|---|
-| `Book` | 항상 `title` 기준 upsert | 동일 |
-| `ScheduleBlock` | 기존 건수가 0일 때만 생성. 아니면 건너뛰고 `skipped.blocks = true` | 전체 삭제 후 재생성 |
-| `Assignment` | 기존 건수가 0일 때만 생성. 아니면 건너뛰고 `skipped.assignments = true` | 전체 삭제 후 재생성 |
+13. **`prisma/seed.ts`와 `tests/fixtures/seed-expected.ts`는 서로 import 하지 않는다** (DR-09). 위 세 표를 **두 번 독립적으로 옮겨 적는 것이 의도다.** 시드가 fixture를 import 하거나 그 반대가 되면 비교 테스트가 아무것도 증명하지 않는다.
 
-`force`는 환경변수 `SEED_FORCE === "1"`로도 켤 수 있다. `main()`이 이 값을 읽어 `seed(client, { force })`에 넘긴다.
-
-8. `main()`은 `createPrismaClient()`로 클라이언트를 만들고, 결과를 한 줄로 출력한 뒤 `$disconnect()` 한다. 예외가 나면 `process.exitCode = 1`.
-
-```
-seeded books=9 blocks=10 assignments=27 (skipped: blocks=false assignments=false)
-```
-
-9. 과제 생성 시 **책 제목 → id 매핑을 미리 만들어 둔다.** 과제마다 `findUnique`를 호출하지 않는다.
-
-### B. 테스트 DB 헬퍼 (`tests/helpers/db.ts`)
-
-10. 아래 API를 export 한다.
+14. fixture는 세 개의 정렬된 상수 배열을 export 한다. ID와 timestamp처럼 비결정적인 필드는 포함하지 않는다.
 
 ```ts
-export interface TestDb {
-  prisma: PrismaClient;
-  url: string;       // file:/절대경로 형태
-  filePath: string;  // 절대 경로
-  cleanup: () => Promise<void>;
+export interface ExpectedBook {
+  title: string;
+  language: "EN" | "KO";
+  progressUnit: "CHAPTER" | "PAGE";
+  totalUnits: number | null;
+  archivedAt: Date | null;
 }
 
-export async function createTestDb(): Promise<TestDb>;
+export interface ExpectedBlock {
+  startMinute: number;
+  endMinute: number | null;
+  label: string;
+  kind: "STUDY" | "MEAL" | "FREE" | "MARKER";
+  matchType: string | null;
+}
+
+export interface ExpectedAssignment {
+  date: string;
+  orderIndex: number;
+  type: string;
+  title: string | null;
+  bookTitle: string | null;   // bookId는 cuid라 비결정적 → 제목으로 대조한다
+  startUnit: number | null;
+  endUnit: number | null;
+  status: string;
+  completedAt: Date | null;
+}
+
+export const EXPECTED_BOOKS: readonly ExpectedBook[] = [ /* 9건, title 오름차순 */ ];
+export const EXPECTED_BLOCKS: readonly ExpectedBlock[] = [ /* 10건 */ ];
+export const EXPECTED_ASSIGNMENTS: readonly ExpectedAssignment[] = [ /* 27건 */ ];
 ```
 
-11. 동작 순서:
-    1. 저장소 루트의 `.tmp/` 디렉터리를 보장한다 (`fileURLToPath(new URL("../../", import.meta.url))`로 루트를 구한다).
-    2. 템플릿 DB `.tmp/test-template.db`가 없으면 만든다.
-       - `.tmp/test-template.<pid>-<랜덤>.db`에 `npx prisma migrate deploy`를 실행한다. `execFileSync`의 `env`에 `DATABASE_URL`을 **절대 경로**로 주고, `cwd`는 저장소 루트로 한다.
-       - 완료 후 `fs.renameSync`로 `.tmp/test-template.db`에 옮긴다. rename은 원자적이므로 vitest 워커가 동시에 들어와도 안전하다.
-    3. 템플릿을 `.tmp/test-<랜덤>.db`로 복사한다.
-    4. 복사본에 `createPrismaClient(url)`로 붙고 `enableWal(client)`를 적용한다.
-    5. `cleanup`은 `$disconnect()` 후 `.db` / `.db-wal` / `.db-shm` 세 파일을 지운다 (없으면 무시).
+15. **정렬 규칙.** 조회 결과와 fixture 양쪽에 같은 규칙을 적용한다.
 
-12. **템플릿에는 WAL을 적용하지 않는다.** WAL 상태의 DB를 `-wal` 파일 없이 복사하면 해석이 애매해진다. WAL은 복사본마다 4번 단계에서 적용한다.
+| 배열 | 정렬 키 |
+|---|---|
+| `EXPECTED_BOOKS` | `title` 오름차순 |
+| `EXPECTED_BLOCKS` | `startMinute` → `endMinute ?? -1` → `label` 오름차순 |
+| `EXPECTED_ASSIGNMENTS` | `date` → `orderIndex` 오름차순 |
 
-13. 경로는 **전부 절대 경로**로 다룬다. 상대 경로는 `schema.prisma` 기준으로 해석되므로(D19) 테스트에서 쓰면 위치를 예측하기 어렵다.
+16. **문자열 정렬은 비교 연산자(코드 유닛 순서)로 한다. `localeCompare`를 쓰지 않는다** — ICU 버전과 로케일에 따라 한글·숫자 혼합 정렬 결과가 달라져 테스트가 환경에 의존하게 된다. 코드 유닛 순서에서 `EXPECTED_BOOKS`의 순서는 아래와 같다.
 
-14. `createTestDb()`는 시드를 실행하지 않는다. 시드가 필요한 테스트가 직접 `seed(db.prisma)`를 부른다. **빈 DB가 기본값이다** — 후속 태스크의 통합 테스트는 대부분 자기 픽스처를 만든다.
+```
+13 Tree House, Andrew Lost, Big Note, Jake Drake Bully Buster,
+Kid Spy, wimpy kid, 김방구 3, 무지개 물고기, 엄마 5분만
+```
 
-### C. 설정 변경
+(숫자 < 대문자 < 소문자 < 한글 순이므로 `wimpy kid`가 `Kid Spy` 뒤, 한글 앞에 온다.)
 
-15. `package.json`:
+17. `EXPECTED_BLOCKS`의 정렬 결과는 요구사항 9의 표 순서와 같다. 480분에 두 건이 있으나 `endMinute ?? -1`이 `아침식사 끝내기`(-1)를 `원리셈 · 플라토 · 따플 · 디딤돌`(600)보다 앞에 둔다.
+
+### D. 설정 변경
+
+18. `package.json`:
     - `scripts`에 `"db:seed": "DATABASE_URL=${DATABASE_URL:-file:./dev.db} tsx prisma/seed.ts"` 추가
     - 기존 `db:setup`을 `"npm run db:deploy && npm run db:wal && npm run db:seed"`로 수정
-    - 최상위에 `"prisma": { "seed": "tsx prisma/seed.ts" }` 추가 (`prisma db seed` 지원)
 
-16. `vitest.config.ts`: `testTimeout`을 `30_000`으로 올리고 `hookTimeout: 30_000`을 추가한다. 첫 통합 테스트가 템플릿 DB 마이그레이션을 수행하므로 10초로는 부족하다.
+19. `src/server/prisma.test.ts`의 `EXPECTED_DB_URL_SCRIPTS`에 `"db:seed"`를 추가해 정렬을 유지한다 (T03 요구사항 17). 갱신하지 않으면 T03의 exact match 테스트가 실패한다 — 그것이 그 테스트의 목적이다.
 
-17. `.gitignore`에 `/.tmp/`를 추가한다. 기존 항목은 지우지 않는다.
+```ts
+const EXPECTED_DB_URL_SCRIPTS = [
+  "db:deploy",
+  "db:diff",
+  "db:generate",
+  "db:migrate",
+  "db:seed",
+  "db:validate",
+  "db:wal",
+] as const;
+```
 
 ## 비즈니스 규칙
 
-| 규칙 | 위반 시 동작 |
+**테스트는 번호가 아니라 이름으로 참조한다** (DR-13).
+
+| 규칙 | 위반 시 동작 (검증 테스트명) |
 |---|---|
-| 책은 제목당 1건 (D4, F1) | 같은 제목이 2건 생기면 테스트 2 실패. 진도 체인이 끊긴다 |
-| `startUnit`은 전부 `null` (D5) | 테스트 4 실패. 시작점을 저장하면 D5가 기각한 A안이 된다 |
-| 읽기 유형 ⟺ `bookId != null` (I1) | 테스트 5 실패 |
-| 비읽기 유형은 `startUnit`·`endUnit`이 `null` (I2) | 테스트 5 실패 |
-| `endMinute == null` ⟺ `kind == MARKER` (I8) | 테스트 6 실패 |
-| 범위 블록끼리 겹치지 않는다 (I9, D15) | 테스트 7 실패 |
-| 판독 불가 항목을 추측해 채우지 않는다 (부록 C.2-1) | 테스트 10·13 실패 |
-| 기존 데이터가 있으면 덮어쓰지 않는다 | 테스트 12 실패. 부모가 입력한 계획이 시드 재실행으로 사라진다 |
-| `김방구 3`의 `3`을 챕터로 파싱하지 않는다 | 테스트 9 실패 |
+| 책·블록·과제의 모든 값이 표와 정확히 일치 (부록 C) | `Book 9건이 기대 fixture와 정확히 일치한다` / `ScheduleBlock 10건이 기대 fixture와 정확히 일치한다` / `Assignment 27건이 기대 fixture와 정확히 일치한다` |
+| 책은 제목당 1건 (D4, F1) | `같은 책이 여러 날에 나와도 Book은 제목당 1건이다` |
+| `startUnit`은 전부 `null` (D5) | `모든 과제의 startUnit이 null이고 status가 PLANNED다` |
+| 읽기 유형 ⟺ `bookId != null` (I1), 비읽기는 진도 필드 없음 (I2) | `읽기 과제와 비읽기 과제의 필드 조건이 I1·I2를 만족한다` |
+| `endMinute == null` ⟺ `kind == MARKER` (I8) | `마커 블록 2건만 endMinute이 null이고 kind가 MARKER다` |
+| 범위 블록끼리 겹치지 않는다 (I9, D15) | `범위 블록끼리 시간이 겹치지 않는다` |
+| 판독 불가 항목을 추측해 채우지 않는다 (부록 C.2-1) | `2026-07-29에는 과제가 2건이고 한글책 과제가 없다` / `판독 불가 항목을 임의로 채우지 않는다` |
+| 기본 시드는 기존 데이터를 덮어쓰거나 지우지 않는다 (DR-10) | `기존 과제가 있으면 다시 만들지 않는다` / `기본 시드는 기존 Book의 사용자 필드를 보존한다` / `기본 시드는 기존 블록과 과제를 보존한다` |
+| force 중 실패하면 전부 롤백된다 (DR-10) | `force 중 실패하면 삭제가 롤백된다` |
+| force는 Book을 지우지 않는다 (DR-10) | `force는 Book을 삭제하지 않는다` |
+| `김방구 3`의 `3`을 챕터로 파싱하지 않는다 | `김방구 3의 제목이 그대로 저장되고 진도가 파싱되지 않는다` |
 
 ## 테스트 케이스
 
-전부 `tests/integration/seed.test.ts`에 작성한다. 각 테스트는 `beforeEach`에서 `createTestDb()`, `afterEach`에서 `cleanup()`을 부른다.
+전부 `tests/integration/seed.test.ts`에 작성한다. `beforeEach`에서 `createTestDb()`, `afterEach`에서 `cleanup()`, `afterAll`에서 `cleanupAllTestDbs()`를 부른다 (T03 헬퍼).
 
-### 정상 케이스
-
-| # | 테스트명 | 입력 | 기대 결과 |
-|---|---|---|---|
-| 1 | `빈 DB에 시드하면 책 9권·블록 10건·과제 27건이 생긴다` | `seed(prisma)` | `books=9`, `blocks=10`, `assignments=27`, `skipped` 둘 다 `false` |
-| 2 | `같은 책이 여러 날에 나와도 Book은 제목당 1건이다` | 시드 후 조회 | `Big Note`, `Kid Spy`, `13 Tree House`, `wimpy kid`, `Jake Drake Bully Buster` 각각 정확히 1건 |
-| 3 | `wimpy kid만 PAGE 단위이고 나머지 8권은 CHAPTER다` | 시드 후 조회 | `progressUnit === "PAGE"`인 책이 `wimpy kid` 1건 |
-| 4 | `모든 과제의 startUnit이 null이고 status가 PLANNED다` | 시드 후 조회 | `startUnit != null`인 과제 0건, `status != "PLANNED"`인 과제 0건 |
-| 5 | `읽기 과제와 비읽기 과제의 필드 조건이 I1·I2를 만족한다` | 시드 후 조회 | 읽기 유형은 전부 `bookId != null && title == null`, 비읽기 유형은 전부 `bookId == null && title != null && startUnit == null && endUnit == null` |
-| 6 | `마커 블록 2건만 endMinute이 null이고 kind가 MARKER다` | 시드 후 조회 | `endMinute == null`인 블록 2건, 그 2건의 `kind`가 모두 `MARKER`, 나머지 8건은 `endMinute != null && kind != "MARKER"` |
-| 7 | `범위 블록끼리 시간이 겹치지 않는다` | 시드 후 조회 | `endMinute != null`인 블록을 `startMinute` 오름차순 정렬했을 때 모든 인접 쌍이 `prev.endMinute <= next.startMinute` |
-| 8 | `matchType이 지정된 블록은 5건이다` | 시드 후 조회 | `ENGLISH_READING` 2건, `DIARY` 1건, `KOREAN_READING` 1건, `WORKSHEET` 1건 |
-| 9 | `김방구 3의 제목이 그대로 저장되고 진도가 파싱되지 않는다` | 시드 후 조회 | `title === "김방구 3"`, `language === "KO"`, 그 책의 과제 1건의 `endUnit === null` |
-| 10 | `2026-07-29에는 과제가 2건이고 한글책 과제가 없다` | 시드 후 조회 | 2건, `type` 집합이 `{ENGLISH_READING, DIARY}`, `orderIndex`가 `[0, 1]` |
-| 11 | `2026-08-01의 orderIndex가 0,1,2로 연속이다` | 시드 후 조회 | 3건, `orderIndex` 오름차순이 `[0, 1, 2]` |
-| 12 | `wimpy kid의 진도 체인 근거가 저장된다` | 시드 후 조회 | `2026-08-08`의 `endUnit === 102`, `2026-08-09`의 `endUnit === 217` |
-
-### 규칙 위반 케이스
+### 정상 케이스 — exact match (DR-09의 핵심)
 
 | # | 테스트명 | 입력 | 기대 결과 |
 |---|---|---|---|
-| 13 | `기존 과제가 있으면 다시 만들지 않는다` | 과제 1건을 직접 생성 후 `seed(prisma)` | 과제 총 1건 유지, `result.assignments === 0`, `result.skipped.assignments === true` |
-| 14 | `판독 불가 항목을 임의로 채우지 않는다` | 시드 후 전체 과제·책 조회 | `title`과 책 제목 어디에도 `김치`가 포함된 건이 0건 |
-| 15 | `시드를 두 번 실행해도 과제가 늘지 않는다` | `seed` → `seed` | 과제 27건 유지, 두 번째 `result.skipped.assignments === true` |
-| 16 | `force로 재실행해도 중복이 생기지 않는다` | `seed` → `seed(prisma, { force: true })` | 과제 27건, 블록 10건, 책 9권 유지 |
+| 1 | `Book 9건이 기대 fixture와 정확히 일치한다` | 시드 후 전체 조회 → 요구사항 14의 필드만 추출 → 요구사항 15로 정렬 | `EXPECTED_BOOKS`와 deep equal |
+| 2 | `ScheduleBlock 10건이 기대 fixture와 정확히 일치한다` | 같은 방식 | `EXPECTED_BLOCKS`와 deep equal |
+| 3 | `Assignment 27건이 기대 fixture와 정확히 일치한다` | 같은 방식. `bookId`는 `bookTitle`로 변환 | `EXPECTED_ASSIGNMENTS`와 deep equal |
+| 4 | `시드 결과 건수가 9·10·27이다` | `seed(prisma)` | `books=9`, `blocks=10`, `assignments=27`, `skipped` 둘 다 `false` |
+
+1~3번이 통과하면 총 건수·제목·언어·단위·label·시각·type·date·orderIndex·endUnit이 **전부** 대조된다. 아래 일반 불변식 테스트는 그와 별개로 유지한다 — 불변식은 "표가 맞다"와 다른 것을 증명하며, 후속 태스크가 시드를 바꿀 때 규칙 위반을 잡는다.
+
+### 정상 케이스 — 일반 불변식
+
+| # | 테스트명 | 입력 | 기대 결과 |
+|---|---|---|---|
+| 5 | `같은 책이 여러 날에 나와도 Book은 제목당 1건이다` | 시드 후 조회 | `Big Note`, `Kid Spy`, `13 Tree House`, `wimpy kid`, `Jake Drake Bully Buster` 각각 1건 |
+| 6 | `wimpy kid만 PAGE 단위이고 나머지 8권은 CHAPTER다` | 시드 후 조회 | `progressUnit === "PAGE"`인 책이 1건 |
+| 7 | `모든 과제의 startUnit이 null이고 status가 PLANNED다` | 시드 후 조회 | `startUnit != null` 0건, `status != "PLANNED"` 0건 |
+| 8 | `읽기 과제와 비읽기 과제의 필드 조건이 I1·I2를 만족한다` | 시드 후 조회 | 읽기는 `bookId != null && title == null`, 비읽기는 `bookId == null && title != null && startUnit == null && endUnit == null` |
+| 9 | `마커 블록 2건만 endMinute이 null이고 kind가 MARKER다` | 시드 후 조회 | `endMinute == null` 2건, 그 2건의 `kind`가 `MARKER`, 나머지 8건은 `endMinute != null && kind != "MARKER"` |
+| 10 | `범위 블록끼리 시간이 겹치지 않는다` | 시드 후 조회 | `endMinute != null`을 `startMinute` 오름차순 정렬 시 모든 인접 쌍이 `prev.endMinute <= next.startMinute` |
+| 11 | `matchType이 지정된 블록은 5건이다` | 시드 후 조회 | `ENGLISH_READING` 2건, `DIARY` 1건, `KOREAN_READING` 1건, `WORKSHEET` 1건 |
+| 12 | `김방구 3의 제목이 그대로 저장되고 진도가 파싱되지 않는다` | 시드 후 조회 | `title === "김방구 3"`, `language === "KO"`, 그 책의 과제 1건의 `endUnit === null` |
+| 13 | `2026-07-29에는 과제가 2건이고 한글책 과제가 없다` | 시드 후 조회 | 2건, `type` 집합이 `{ENGLISH_READING, DIARY}`, `orderIndex`가 `[0, 1]` |
+| 14 | `wimpy kid의 진도 체인 근거가 저장된다` | 시드 후 조회 | `2026-08-08`의 `endUnit === 102`, `2026-08-09`의 `endUnit === 217` |
+
+### 규칙 위반 케이스 — 데이터 보존과 롤백 (DR-10)
+
+아래 테스트들은 **사용자 데이터 fixture를 먼저 만든 뒤** 시드를 돌린다. fixture는 시드 표에 없는 값이어야 한다.
+
+사용자 fixture 정의: `Big Note`를 `progressUnit=PAGE`, `totalUnits=99`, `archivedAt=2026-07-30T00:00:00Z`로 생성 / `startMinute=1200, endMinute=1260, label="사용자 블록", kind=FREE`인 블록 1건 / `date="2026-08-20", orderIndex=0, type=DIARY, title="사용자 과제"`인 과제 1건.
+
+| # | 테스트명 | 입력 | 기대 결과 |
+|---|---|---|---|
+| 15 | `기존 과제가 있으면 다시 만들지 않는다` | fixture 생성 후 `seed(prisma)` | 과제 1건 유지, `result.assignments === 0`, `result.skipped.assignments === true` |
+| 16 | `기본 시드는 기존 Book의 사용자 필드를 보존한다` | 같은 조건 | `Big Note`의 `progressUnit === "PAGE"`, `totalUnits === 99`, `archivedAt`이 그대로. **`updatedAt`은 검사하지 않는다** (요구사항 3) |
+| 17 | `기본 시드는 기존 블록과 과제를 보존한다` | 같은 조건 | `사용자 블록`과 `사용자 과제`가 그대로 존재하고 블록·과제 총 건수가 각각 1 |
+| 18 | `force 중 실패하면 삭제가 롤백된다` | fixture 생성 후 `seed(prisma, { force: true, beforeCreateHook: () => { throw new Error("boom"); } })` | 호출이 reject되고, `사용자 블록`·`사용자 과제`가 **그대로 남아 있다**. 블록·과제 건수가 각각 1 |
+| 19 | `force는 Book을 삭제하지 않는다` | fixture 생성 후 `seed(prisma, { force: true })` | `Big Note`가 존재하고 `totalUnits === 99` 유지. 책 총 9권 |
+| 20 | `판독 불가 항목을 임의로 채우지 않는다` | 시드 후 전체 과제·책 조회 | `title`과 책 제목 어디에도 `김치`가 포함된 건이 0건 |
 
 ### 경계 케이스
 
 | # | 테스트명 | 입력 | 기대 결과 |
 |---|---|---|---|
-| 17 | `계획이 없는 날에는 과제가 0건이다` | 시드 후 조회 | `2026-08-03`, `2026-08-10`, `2026-08-14`, `2026-08-15`, `2026-08-16`, `2026-08-17` 전부 0건 |
-| 18 | `모든 과제 날짜가 방학 기간 안이다` | 시드 후 조회 | 모든 `date`가 `"2026-07-29" <= date <= "2026-08-17"` (D18. 문자열 비교로 판정 — D9) |
-| 19 | `블록의 시각이 0 이상 1440 이하다` | 시드 후 조회 | 모든 `startMinute`이 `0..1439`, `endMinute`이 있으면 `startMinute < endMinute <= 1440` (I7) |
-| 20 | `테스트 DB에 WAL이 적용된다` | `createTestDb()` 후 `getJournalMode` | `"wal"` |
-| 21 | `테스트 DB는 서로 격리된다` | `createTestDb()` 2회 후 한쪽에만 책 1건 생성 | 다른 쪽의 책 수가 0, 두 `filePath`가 서로 다름 |
+| 21 | `시드를 두 번 실행해도 과제가 늘지 않는다` | `seed` → `seed` | 과제 27건 유지, 두 번째 `skipped.assignments === true` |
+| 22 | `force로 재실행해도 중복이 생기지 않는다` | `seed` → `seed(prisma, { force: true })` | 과제 27건, 블록 10건, 책 9권. **케이스 3의 exact match를 다시 통과한다** |
+| 23 | `계획이 없는 날에는 과제가 0건이다` | 시드 후 조회 | `2026-08-03`, `08-10`, `08-14`, `08-15`, `08-16`, `08-17` 전부 0건 |
+| 24 | `모든 과제 날짜가 방학 기간 안이다` | 시드 후 조회 | 모든 `date`가 `"2026-07-29" <= date <= "2026-08-17"` (D18, 문자열 비교 — D9) |
+| 25 | `블록의 시각이 0 이상 1440 이하다` | 시드 후 조회 | `startMinute`이 `0..1439`, `endMinute`이 있으면 `startMinute < endMinute <= 1440` (I7) |
+| 26 | `블록만 있고 과제가 없는 DB에서는 과제만 채운다` | 블록 1건만 만든 뒤 `seed(prisma)` | `skipped.blocks === true`, `skipped.assignments === false`, 과제 27건 생성 |
+
+### 규칙 위반 케이스 — 검증이 실제로 작동하는지 (mutation 확인)
+
+DR-09가 요구한 절차다. **`prisma/seed.ts`를 임시로 고쳐** exact match 테스트가 실패하는지 확인하고 되돌린다. fixture가 아니라 구현을 고치는 것이 요점이다 — fixture를 고치면 "비교가 살아 있다"만 알 수 있고 "시드가 표와 같다"는 증명되지 않는다.
+
+| # | 케이스명 | 임시 변경 | 기대 결과 |
+|---|---|---|---|
+| 27 | 책 표의 셀 변경이 잡히는가 | `Andrew Lost`의 `progressUnit`을 `PAGE`로 | `Book 9건이 기대 fixture와 정확히 일치한다`가 실패 |
+| 28 | 블록 표의 셀 변경이 잡히는가 | `뿌리깊은 국어`의 `label`을 `뿌리깊은국어`로 (공백 제거) | `ScheduleBlock 10건이 기대 fixture와 정확히 일치한다`가 실패 |
+| 29 | 과제 표의 셀 변경이 잡히는가 | `2026-08-09`의 `endUnit`을 `217` → `218`로 | `Assignment 27건이 기대 fixture와 정확히 일치한다`가 실패 |
+
+**세 명령의 실제 출력을 완료 보고에 포함하고, 코드는 원상 복구된 상태여야 한다.**
 
 ## 완료 조건
 
+### 1. 테스트
+
 ```
-npm test        → 기존 7건 + 신규 21건 = 28 passed
-npm run db:setup → "seeded books=9 blocks=10 assignments=27" 출력, 종료 코드 0
-npm run db:seed  → 2회째 실행 시 skipped=true로 표시되고 종료 코드 0
-npm run typecheck → 에러 0
-npm run lint      → 에러 0
-npm run build     → 성공
-npm run e2e       → 1 passed
+npm run typecheck                → 에러 0
+npm run lint                     → 에러 0
+npm test -- --reporter=verbose   → 실패 0건. 정상 케이스 1~14, 위반 15~20,
+                                   경계 21~26의 테스트명이 모두 출력에 나타난다
+npm run build                    → 성공
+npm run e2e                      → 실패 0건
 ```
 
-완료 보고에 `npm test`와 `npm run db:setup`의 **실제 출력**을 포함한다.
+**누적 테스트 개수를 완료 조건으로 쓰지 않는다.** 명명된 테스트 이름이 `--reporter=verbose` 출력에 나타나는 것으로 판정한다.
+
+### 2. 시드 실행 검증 — 격리된 임시 DB에서만 (DR-11)
+
+**개발 DB(`prisma/dev.db`)를 비우거나 `SEED_FORCE`로 덮어쓰지 않는다.** 완료 출력(9/10/27)은 빈 DB에서만 나오므로, 개발 DB에 데이터가 있으면 설계대로 skip되어 0이 출력된다. 그것은 정상 동작이며 완료 실패가 아니다. 따라서 검증은 새 임시 DB에서 수행한다.
+
+```bash
+set -e
+VERIFY_DB="$PWD/.tmp/verify-seed-$$.db"
+mkdir -p "$PWD/.tmp"
+trap 'rm -f "$VERIFY_DB" "$VERIFY_DB-wal" "$VERIFY_DB-shm"' EXIT
+
+BEFORE=$(shasum "prisma/dev.db" 2>/dev/null || echo "no-dev-db")
+
+DATABASE_URL="file:$VERIFY_DB" npm run db:deploy
+DATABASE_URL="file:$VERIFY_DB" npm run db:wal      # → journal_mode=wal
+DATABASE_URL="file:$VERIFY_DB" npm run db:seed     # → books=9 blocks=10 assignments=27
+DATABASE_URL="file:$VERIFY_DB" npm run db:seed     # → skipped: blocks=true assignments=true
+
+AFTER=$(shasum "prisma/dev.db" 2>/dev/null || echo "no-dev-db")
+[ "$BEFORE" = "$AFTER" ] || { echo "개발 DB가 변경되었다"; exit 1; }
+echo "개발 DB 불변 확인: $BEFORE"
+```
+
+| 단계 | 기대 |
+|---|---|
+| 1회차 `db:seed` | `seeded books=9 blocks=10 assignments=27 (skipped: blocks=false assignments=false)` |
+| 2회차 `db:seed` | `skipped: blocks=true assignments=true`, 종료 코드 0 |
+| 개발 DB checksum | 전후 동일 |
+| `trap` | 임시 `.db`·`-wal`·`-shm` 전부 삭제 |
+
+`prisma/dev.db`가 아직 없으면 양쪽이 `no-dev-db`로 같으므로 검사는 그대로 성립한다.
+
+완료 보고에 위 스크립트의 **실제 출력 전문**과, mutation 케이스 27~29의 출력을 포함한다.
 
 ## 금지 사항
 
+- **완료 검증을 위해 `prisma/dev.db`를 지우거나 `SEED_FORCE=1`로 실행하지 않는다** (DR-11).
+- `prisma/seed.ts`가 `tests/fixtures/seed-expected.ts`를 import 하지 않는다. 그 반대도 금지 (DR-09).
+- `update: {}` 대신 시드값을 넣어 기존 Book을 덮어쓰지 않는다 (DR-10).
+- `force`에서 `Book`을 `deleteMany` 하지 않는다.
+- 삭제·생성을 트랜잭션 밖에서 수행하지 않는다.
+- `beforeCreateHook`을 `main()`이나 프로덕션 경로에서 넘기지 않는다.
+- `package.json`에 `"prisma": { "seed": ... }` 설정을 추가하지 않는다. `prisma db seed` 경로는 D19의 기본값 주입을 거치지 않아 `.env` 없는 환경에서 실패한다. 시드 실행은 `npm run db:seed`만 쓴다.
 - `김치찌…`를 포함해 판독 불가 항목을 어떤 이름으로도 시드하지 않는다.
 - `startUnit`에 값을 넣지 않는다. 계산해서 채우는 것도 금지다 (D5가 기각한 A안).
 - 진도 표기가 없는 책에 `endUnit`을 추정해 넣지 않는다 (F4).
 - `Book.totalUnits`를 채우지 않는다. 실물에 없는 정보다.
 - 과제 상태를 `DONE`으로 시드하지 않는다. 지난 날짜 정리는 T17의 일괄 완료 기능이 담당한다 (부록 C.3).
-- `src/` 아래 파일을 만들거나 고치지 않는다. 특히 `src/domain/`은 T05다.
-- `src/server/prisma.ts`를 수정하지 않는다. 필요한 함수는 T03에서 이미 export되어 있다.
-- 시드에서 `deleteMany`를 무조건 호출하지 않는다. `force`일 때만이다.
-- `.github/workflows/ci.yml`을 수정하지 않는다. T03이 `db:setup`을 이미 호출하도록 해두었다.
+- `tests/helpers/db.ts`를 수정하지 않는다 (T03 소관).
+- `src/server/prisma.ts`, `prisma/schema.prisma`, `vitest.config.ts`, `.github/workflows/ci.yml`을 수정하지 않는다. T03이 이미 필요한 상태로 만들어 두었다.
 - 새 npm 의존성을 추가하지 않는다.
 
 ## 스펙 미정 사항
@@ -264,10 +406,16 @@ npm run e2e       → 1 passed
 | # | 지점 | 결정 |
 |---|---|---|
 | 1 | 7/29 한글책 제외로 생기는 `orderIndex` 빈자리 | **빈자리를 남기지 않는다.** `0, 1`로 연속시킨다. 실물의 세로 위치를 보존할 이유가 없고, T17에서 사용자가 추가하면 끝에 붙는다 |
-| 2 | 시드의 기본 파괴성 | **비파괴가 기본.** `force`는 명시적으로 켜야 한다. 시드는 개발·초기화용이지만 `db:setup`이 실수로 재실행될 수 있다 |
-| 3 | 통합 테스트의 DB 격리 | 파일별 임시 DB 복사본. 인메모리 SQLite(`file::memory:`)는 쓰지 않는다 — WAL 검증(테스트 20)과 실제 파일 동작이 달라진다 |
-| 4 | 템플릿 DB 재사용 | 재사용한다. 매 테스트마다 `migrate deploy`를 돌리면 통합 테스트가 늘수록 선형으로 느려진다 |
-| 5 | `.tmp/` 정리 | 자동 정리하지 않는다. `cleanup()`이 개별 DB를 지우고 템플릿만 남는다. 스키마가 바뀌면 `rm -rf .tmp`로 수동 폐기 — **T05 이후 스키마 변경 태스크의 스펙에 이 절차를 명시할 것** |
-| 6 | 시드를 CI에서 돌릴 것인가 | 돌린다. T03이 e2e job에 `db:setup`을 넣어두었고, E2E 시나리오는 시드 데이터를 전제로 한다 |
-| 7 | `SeedResult.books`의 의미 | 신규 생성이 아니라 **upsert된 총 건수**(항상 9). 책은 건너뛰기 대상이 아니다 |
-| 8 | 블록과 과제의 건너뛰기 판정 | 각각 독립적으로 자기 테이블의 건수만 본다. 한쪽만 비어 있어도 그쪽만 채운다 |
+| 2 | 시드의 기본 파괴성 | **비파괴가 기본.** `force`는 명시적으로 켜야 한다 |
+| 3 | Book upsert의 update 분기 | **`update: {}`.** 기존 사용자 편집을 보존한다. `@updatedAt` 갱신은 허용하고 검증 대상에서 제외한다 (DR-10) |
+| 4 | `force`가 Book에 미치는 영향 | **없다.** 삭제 대상은 `Assignment`·`ScheduleBlock`뿐이다 |
+| 5 | 트랜잭션 경계 | 책 upsert부터 과제 생성까지 **전부 하나의 `$transaction`** (요구사항 2). `timeout: 30_000` |
+| 6 | `beforeCreateHook` 테스트 seam | 롤백을 결정적으로 검증할 다른 방법이 없다. T03의 `afterCopyHook`과 같은 패턴이며 프로덕션 경로는 넘기지 않는다 |
+| 7 | fixture 중복 전사 | **의도된 중복이다** (DR-09). 두 파일이 서로를 참조하면 비교가 무의미해진다. 표가 바뀌면 두 곳을 함께 고치고, 그 사실을 PR 본문에 적는다 |
+| 8 | 문자열 정렬 방식 | 코드 유닛 비교. `localeCompare` 금지 (요구사항 16) |
+| 9 | `bookId` 비교 방법 | cuid는 비결정적이므로 `bookTitle`로 변환해 비교한다 (요구사항 14) |
+| 10 | 완료 검증 DB의 위치 | `.tmp/verify-seed-$$.db` 절대 경로. `.gitignore`의 `/.tmp/`가 T03에서 이미 추가되어 있다 |
+| 11 | 시드를 CI에서 돌릴 것인가 | 돌린다. T03이 e2e job에 `db:setup`을 넣어두었고 `db:setup`이 이제 `db:seed`를 포함한다. E2E 시나리오는 시드 데이터를 전제로 한다 |
+| 12 | `SeedResult.books`의 의미 | 신규 생성이 아니라 **upsert된 총 건수**(항상 9). 책은 건너뛰기 대상이 아니다 |
+| 13 | 블록과 과제의 건너뛰기 판정 | 각각 독립적으로 자기 테이블의 건수만 본다. 한쪽만 비어 있어도 그쪽만 채운다 (경계 케이스 26) |
+| 14 | `.tmp/` 정리 | `cleanup()`이 개별 DB를 지우고 템플릿만 남는다. 스키마가 바뀌면 T03의 지문 검사가 템플릿을 자동 재생성하므로 수동 `rm -rf .tmp`는 필요하지 않다 |
