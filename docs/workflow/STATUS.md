@@ -1,15 +1,15 @@
 # Workflow Status
 
 - current_branch: docs/specs-batch1
-- stage: spec-revision
-- doc_status: ready-for-rereview
+- stage: spec-reviewed
+- doc_status: changes-requested
 - active_tasks: T01, T02, T03, T04
 - spec_writer: claude
 - spec_reviewer: codex
-- review_round: 3
-- review_target_commit: 4ff75fa5a838482ac7223fc82499bffcdc0cbcdf
-- review_file: docs/reviews/DR-T01-T04-spec-rereview-round3.md
-- previous_review_file: docs/reviews/DR-T01-T04-spec-rereview-round2.md
+- review_round: 4
+- review_target_commit: 9a70c5c42ea9d38aea0d30b5eccb9a527b20c7b1
+- review_file: docs/reviews/DR-T01-T04-spec-rereview-round4.md
+- previous_review_file: docs/reviews/DR-T01-T04-spec-rereview-round3.md
 - original_review_file: docs/reviews/DR-T01-T04-spec-review.md
 - original_review_commit: b4511c7
 - rereview_base_commit: c77ab5c33122da5fd3414e1ed054fe22224506fc
@@ -18,7 +18,7 @@
 - overall_verdict: BLOCK
 - T01_verdict: PASS
 - T02_verdict: PASS
-- T03_verdict: BLOCK
+- T03_verdict: PASS
 - T04_verdict: BLOCK
 - implementation_allowed: false
 - requirements_file: docs/requirements.md
@@ -26,18 +26,18 @@
 - unapproved_design_assumptions: 0
 - open_implementation_details: 0
 - open_implementation_detail_ids: —
-- next_action: Codex Round 4 independent rereview
-- next_owner: codex
+- next_action: Claude fixes blocking R2-04 mutation 29c/29d and nonblocking R4-01/R4-02; Codex then independently rereviews
+- next_owner: claude
 
 ## Verdict ownership
 
-**Only Codex changes finding verdicts.** Claude is the spec author and does not mark its own work `RESOLVED`, `PASS`, or `CLOSED`. 아래 revision 3·4의 `addressed_by_claude` / `pending_codex_verification` 이력은 그대로 보존한다. **현재 `overall_verdict`와 태스크별 판정은 Codex Round 3의 결과이며 Claude가 바꾸지 않았다** — T01 PASS · T02 PASS · T03 BLOCK · T04 BLOCK · overall BLOCK.
+**Only Codex changes finding verdicts.** Claude is the spec author and does not mark its own work `RESOLVED`, `PASS`, or `CLOSED`. 아래 revision 3·4의 `addressed_by_claude` / `pending_codex_verification` 이력은 그대로 보존한다. **현재 `overall_verdict`와 태스크별 판정은 Codex Round 4의 결과다** — T01 PASS · T02 PASS · T03 PASS · T04 BLOCK · overall BLOCK.
 
-Round 2·3의 Codex 판정과 심각도 집계는 **역사적 기록이며 이번 revision에서 변경하지 않았다.** Claude revision 3의 집계도 과거 이력이다. 현재 잔여 심각도는 아래 **Round 3 — Codex verdict** 절이 정의한다.
+Round 2·3의 Codex 판정과 심각도 집계는 **역사적 기록이며 변경하지 않았다.** Claude revision 3·4의 집계도 과거 수정 이력이다. 현재 잔여 심각도는 아래 **Round 4 — Codex verdict** 절이 정의한다.
 
-`doc_status`는 `ready-for-rereview`로 바뀌었다. 이는 **Claude의 수정이 끝나 재검토를 받을 준비가 됐다는 뜻일 뿐, Finding이 해결됐다는 판정이 아니다.** `overall_verdict`는 `BLOCK`, `implementation_allowed`는 `false`로 유지된다 — 두 값은 Codex Round 4에서만 바뀔 수 있다.
+`doc_status`는 `changes-requested`다. 기존 재검증 Finding 6건 중 5건은 RESOLVED, R2-04는 PARTIALLY RESOLVED이며, 회귀 대상 4건은 모두 RESOLVED를 유지한다. 신규 P3 R4-01·R4-02는 비차단이지만 R2-04의 잔여 P2가 T04 구현을 차단하므로 `implementation_allowed`는 `false`다.
 
-`open_implementation_details`가 `0`인 것은 **R3-01이 지적한 미결 선택(빈 날짜 · validation · HTTP 분류 · 결정적 rollback test)을 문서가 이제 지정한다**는 사실 기록이다. R3-01의 판정 자체는 여전히 `pending_codex_verification`이다.
+`open_implementation_details`가 `0`인 것은 **R3-01이 지적한 미결 선택(빈 날짜 · validation · HTTP 분류 · 결정적 rollback test)을 문서가 이제 지정한다**는 사실 기록이다. Codex Round 4는 이 원문 계약을 독립 대조해 R3-01을 `RESOLVED`로 판정했다.
 
 ## Finding Status
 
@@ -126,6 +126,49 @@ Round 2·3의 Codex 판정과 심각도 집계는 **역사적 기록이며 이�
 | R3-02 | P3 | requirements authority/traceability | no |
 
 Round 3 태스크 판정은 **T01 PASS / T02 PASS / T03 BLOCK / T04 BLOCK / overall BLOCK**이다. 상세 근거는 `docs/reviews/DR-T01-T04-spec-rereview-round3.md`에 있다.
+
+### Round 4 — Codex verdict at target `9a70c5c`
+
+- rereviewed_existing_findings_total_round4: 6
+- existing_resolved_round4: 5
+- existing_partially_resolved_round4: 1
+- existing_unresolved_round4: 0
+- existing_regressed_round4: 0
+- regression_findings_checked_round4: 4
+- regression_findings_resolved_round4: 4
+- new_findings_total_round4: 2
+- new_P0_round4: 0
+- new_P1_round4: 0
+- new_P2_round4: 0
+- new_P3_round4: 2
+- remaining_P0: 0
+- remaining_P1: 0
+- remaining_P2: 1
+- remaining_P3: 2
+- implementation_blocking_findings: 1
+
+| Existing Finding | Codex Round 4 verdict | Implementation blocking | Result |
+|---|---|---|---|
+| DR-12 | RESOLVED | no | T03 cleanup의 `-journal` 직접 삭제와 mutation 검출력이 독립 기대값·sentinel 절차로 결정적으로 지정됨 |
+| RR-01 | RESOLVED | no | 권위 요구사항, 출처, 33개 조건, MR-30 역추적이 완결됨 |
+| R2-02 | RESOLVED | no | OPEN-02 정책과 bulk-status 요청·실패 계약이 일치하고 미결 구현 상세가 없음 |
+| R2-04 | PARTIALLY RESOLVED | yes — T04 | 전체 DB snapshot·새 client·deep equality는 보강됐으나 29c·29d가 force fixture에서 생성을 skip해 지정 테스트가 통과할 수 있음 |
+| R3-01 | RESOLVED | no | `{ date, to }` 계약, 400/409/500/빈 날짜, 9개 테스트와 rollback seam이 무모순하게 지정됨 |
+| R3-02 | RESOLVED | no | 출처·33개 생성 경위·MR-30·양방향 추적·OPEN 0건이 일치함 |
+
+| Regression Finding | Codex Round 4 verdict | Result |
+|---|---|---|
+| RR-02 | RESOLVED 유지 | T01 ESLint mutation의 오류와 종료 코드 계약에 회귀 없음 |
+| R2-01 | RESOLVED 유지 | 48×48 최소 터치 영역 계약에 회귀 없음 |
+| R2-03 | RESOLVED 유지 | 범위 블록 8건과 시점 2건의 구분에 회귀 없음 |
+| R2-05 | RESOLVED 유지 | 기준일 2026-08-01과 밀린 6건 계산에 회귀 없음 |
+
+| New Finding | Severity | Target | Implementation blocking | Required change |
+|---|---:|---|---|---|
+| R4-01 | P3 | requirements source count wording | no | `docs/requirements.md:20`의 `다섯 항목`을 실제 6개 출처와 맞게 `여섯 항목`으로 정정 |
+| R4-02 | P3 | T04 mutation command count wording | no | `docs/specs/T04-seed.md:500`, `:717`을 실제 10개 mutation 명령과 일치시킴 |
+
+Round 4 태스크 판정은 **T01 PASS / T02 PASS / T03 PASS / T04 BLOCK / overall BLOCK**이다. P2 R2-04가 T04 구현을 차단하므로 `implementation_allowed`는 **false**다. 상세 근거는 `docs/reviews/DR-T01-T04-spec-rereview-round4.md`에 있다.
 
 ### Revision 3 — Claude 수정 (baseline `8b8c051`, 미커밋)
 
@@ -245,8 +288,8 @@ All twelve are resolved. **No unapproved design assumption remains.**
 
 ## Gate
 
-`implementation_allowed` is `false`. No implementation, package install, DB operation, branch change, commit, push, PR, merge, or deployment is authorized by this status.
+`implementation_allowed` is `false`. Codex Round 4에서 R2-04의 구현 차단 P2가 남았으므로 구현을 시작할 수 없다. 이번 검토 작업에는 구현, package install, DB operation, branch change, commit, push, PR, merge, deployment가 포함되지 않았다.
 
-Claude revision 4가 끝났다. **다음 담당자는 Codex**이며, 다음 작업은 `9acc7b2` 이후 문서 변경에 대한 **Round 4 독립 재검토**다. DR-12 · RR-01 · R2-02 · R2-04 · R3-01 · R3-02는 전부 `addressed_by_claude` / `pending_codex_verification`이며, **작성자인 Claude는 어떤 Finding도 RESOLVED · PASS · CLOSED로 판정하지 않았다.** Claude revision 3의 자기 보고와 Codex Round 2 · 3 기록은 과거 이력으로 보존했다.
+Codex Round 4 독립 재검토가 끝났다. **다음 담당자는 Claude**이며, 다음 작업은 R2-04의 mutation 29c·29d를 결정적으로 고치고 비차단 문구 결함 R4-01·R4-02도 수정하는 것이다. 그 뒤 **Codex가 다시 독립 재검토**하며, 구현은 그 판정 전까지 시작하지 않는다. Claude revision 3·4의 자기 보고와 Codex Round 2·3 기록은 과거 이력으로 보존했다.
 
 이번 세션에서 구현은 시작하지 않았고 커밋 · 푸시 · PR · merge · 패키지 설치 · migration · seed · DB 실행도 하지 않았다.
