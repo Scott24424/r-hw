@@ -215,7 +215,7 @@ export default eslintConfig;
    |---|---|---|
    | `FlatCompat` | `@eslint/eslintrc`에서 import해 사용한다 | `eslint-config-next`는 eslintrc 형식이므로 flat config에서 쓰려면 변환이 필요하다 |
    | `next/core-web-vitals` 확장 | 반드시 포함 | Next 권장 규칙 + Core Web Vitals 규칙 |
-   | `next/typescript` 확장 | 반드시 포함 | `@typescript-eslint` 파서·플러그인이 여기서 로드된다. **이것이 없으면 `@typescript-eslint/no-explicit-any` 규칙 자체가 존재하지 않는다** |
+   | `next/typescript` 확장 | 반드시 포함 | **`@typescript-eslint` 플러그인을 등록하는 유일한 지점이다.** `eslint-config-next`의 base config(`next`, 따라서 `next/core-web-vitals`도)는 `*.ts?(x)`에 대해 **파서만** `@typescript-eslint/parser`로 지정하고 플러그인은 등록하지 않는다. 플러그인은 `next/typescript`가 확장하는 `plugin:@typescript-eslint/recommended`에서 온다 — **이것이 없으면 `@typescript-eslint/no-explicit-any` 규칙을 해석할 수 없다** (요구사항 18의 공식 근거, 케이스 15) |
    | `@typescript-eslint/no-explicit-any: "error"` | 반드시 `error` | CLAUDE.md의 `any` 금지 |
    | `ignores` | `.next/**`, `node_modules/**`, `next-env.d.ts` 세 항목 | 생성물을 검사하지 않는다. `node_modules/**`는 기본 무시 대상이지만 **명시한다** — 무시 목록이 한 곳에서 다 읽히게 하기 위함이다 |
 
@@ -223,8 +223,20 @@ export default eslintConfig;
 
     - 필요한 것은 `eslint ^9.0.0`, `@eslint/eslintrc ^3.0.0`, `eslint-config-next ^15.5.0` 셋뿐이다.
     - `typescript-eslint` / `@typescript-eslint/parser` / `@typescript-eslint/eslint-plugin`을 **직접 추가하지 않는다.** `eslint-config-next`가 파서·플러그인의 기본값을 이미 설정하며, `next/typescript`가 그 규칙 집합을 제공한다.
-    - 공식 근거: [Next.js 15 — ESLint Plugin](https://nextjs.org/docs/15/app/api-reference/config/eslint) — `FlatCompat`으로 `extends: ['next/core-web-vitals', 'next/typescript']`를 쓰는 예시가 그대로 문서화되어 있고, "The `next` configuration already handles setting default values for the `parser`, `plugins` and `settings` properties"라고 명시한다. 확인일 **2026-08-01**.
+    - 공식 근거 1: [Next.js 15 — ESLint Plugin](https://nextjs.org/docs/15/app/api-reference/config/eslint) — `FlatCompat`으로 `extends: ['next/core-web-vitals', 'next/typescript']`를 쓰는 예시가 그대로 문서화되어 있고, "The `next` configuration already handles setting default values for the `parser`, `plugins` and `settings` properties"라고 명시한다. 확인일 **2026-08-01**.
+    - 공식 근거 2 (플러그인이 **어느 확장에서** 오는가 — 케이스 15의 전제): `eslint-config-next` 공식 소스. 확인일 **2026-08-01**.
+      - [`typescript.js` (v15.5.4)](https://github.com/vercel/next.js/blob/v15.5.4/packages/eslint-config-next/typescript.js) — `extends: ['plugin:@typescript-eslint/recommended']`. **`@typescript-eslint` 플러그인이 등록되는 지점은 여기 하나다.**
+      - [`index.js` (v15.5.4)](https://github.com/vercel/next.js/blob/v15.5.4/packages/eslint-config-next/index.js) — `plugins: ['import', 'react', 'jsx-a11y']`이고, `overrides`의 `files: ['**/*.ts?(x)']`에는 `parser: '@typescript-eslint/parser'`만 있다. **`@typescript-eslint`를 `plugins`에 넣지 않는다.**
+      - [`core-web-vitals.js` (v15.5.4)](https://github.com/vercel/next.js/blob/v15.5.4/packages/eslint-config-next/core-web-vitals.js) — `index.js` + `plugin:@next/next/core-web-vitals`. 따라서 **`next/core-web-vitals`만으로는 `@typescript-eslint` 플러그인이 로드되지 않는다.**
+      - [`package.json` (v15.5.4)](https://github.com/vercel/next.js/blob/v15.5.4/packages/eslint-config-next/package.json) — `@typescript-eslint/eslint-plugin`·`@typescript-eslint/parser`·`@rushstack/eslint-patch`가 **`eslint-config-next`의 dependencies**이고 `eslint`는 `^9.0.0`을 포함하는 peerDependency다. 그래서 요구사항 3의 세 패키지 외에 아무것도 설치할 필요가 없다.
     - `npm install` 후 `npm run lint`가 **설정 로드 오류**(플러그인/규칙을 찾을 수 없음)로 실패하면 **임의로 패키지를 추가하지 말고 멈추고 보고한다.** 설치된 `eslint-config-next` 버전(`npm ls eslint-config-next @eslint/eslintrc eslint`)과 오류 전문을 함께 낸다.
+
+19. **ESLint 설정 파일은 `eslint.config.mjs` 하나뿐이다** (RR-02).
+
+    - **삭제할 ESLint 파일은 없다.** 현재 저장소에는 `.eslintrc`·`.eslintrc.json`·`.eslintrc.js`·`eslint.config.*`가 **하나도 없다** (`git ls-files` 확인). 레거시 파일을 지우는 단계 자체가 존재하지 않는다.
+    - **새로 만들지도 않는다.** `.eslintrc*`를 만들면 ESLint 9가 flat config와 eslintrc를 함께 보게 되어 `any` 금지의 강제 지점이 둘로 갈라진다 (스펙 미정 11).
+    - `lint` 스크립트는 `eslint .`이며 `next lint`를 쓰지 않는다 (스펙 미정 12). 따라서 `npm run lint`가 읽는 설정은 `eslint.config.mjs` 하나다.
+    - 깨끗한 checkout에서 `npm ci` 직후 `npm run lint`가 **추가 설치 없이** 종료 코드 0이어야 한다 (완료 조건). 실패하면 요구사항 18의 마지막 항목대로 멈추고 보고한다.
 
 ## 비즈니스 규칙
 
@@ -268,23 +280,36 @@ export default eslintConfig;
 | 8 | strict 위반 차단 확인 | `src/app/page.tsx`에 `const s: string = undefined;`을 임시 추가 | `npm run typecheck`가 실패 |
 | 9 | Tailwind 미동작 감지 | `postcss.config.mjs`에서 `@tailwindcss/postcss` 플러그인을 임시 제거하고 `rm -rf .next && npm run build` | 케이스 5의 `grep`이 매치 0건이거나 build가 실패 |
 | 14 | `no-explicit-any` 규칙이 이 config에서 켜진 것인가 | 케이스 7의 `any`를 **그대로 둔 채** `eslint.config.mjs`의 `"@typescript-eslint/no-explicit-any"`를 `"error"` → `"off"`로 임시 변경 | `npm run lint`에서 **`no-explicit-any` 에러가 더 이상 나오지 않는다.** 이 규칙을 켜는 주체가 이 파일임이 증명된다. **확인 후 `"error"`로 되돌리면 다시 실패한다** |
-| 15 | 필수 확장 제거가 감지되는가 | 케이스 7의 `any`를 그대로 둔 채 `eslint.config.mjs`에서 `...compat.config({ ... })` 블록 전체를 임시 제거 | `npm run lint`가 **실패한다.** `@typescript-eslint` 플러그인이 로드되지 않아 규칙을 해석할 수 없다는 설정 오류가 난다 (규칙 위반이 아니라 config 오류이므로 메시지가 다르다 — 출력을 그대로 보고한다) |
+| 15 | **플러그인 제공자만** 제거해도 감지되는가 | 케이스 7의 `any`를 그대로 둔 채, `eslint.config.mjs`의 `extends`에서 **`"next/typescript"` 한 항목만** 임시 제거한다. `rules`의 `"@typescript-eslint/no-explicit-any": "error"`와 `"next/core-web-vitals"`는 **그대로 둔다** | `npm run lint`가 **설정 오류로 실패한다.** 규칙은 남아 있는데 그 규칙을 제공하는 플러그인이 없으므로 ESLint 9가 `TypeError`를 던진다: `Key "rules": Key "@typescript-eslint/no-explicit-any": Could not find plugin "@typescript-eslint" in configuration.` 종료 코드는 lint 위반(1)이 아니라 **2**다. 규칙 위반 메시지(`no-explicit-any`)는 나오지 않는다 |
 
 7·8·9·14·15번은 설정이 실제로 동작하는지 확인하는 절차다. **다섯 명령의 실제 출력을 완료 보고에 포함하고, 코드는 원상 복구된 상태여야 한다.** 9번 후에는 `rm -rf .next && npm run build`로 정상 산출물을 다시 만든다.
 
 **14·15번의 순서와 원복 (RR-02).** 세 mutation이 서로를 가리지 않도록 아래 순서를 지킨다.
 
 ```
-1) page.tsx에 `const x: any = 1;` 추가        → 케이스 7:  npm run lint 실패(no-explicit-any)
-2) 규칙을 "off"로 변경                         → 케이스 14: no-explicit-any 에러 없음
+1) page.tsx에 `const x: any = 1;` 추가        → 케이스 7:  npm run lint 실패(no-explicit-any, 종료 코드 1)
+2) 규칙을 "off"로 변경                         → 케이스 14: no-explicit-any 에러 없음(종료 코드 0)
 3) 규칙을 "error"로 원복                       →           다시 케이스 7과 같은 실패
-4) compat.config 블록 전체 제거                 → 케이스 15: 설정 오류로 실패
+4) extends에서 "next/typescript"만 제거         → 케이스 15: 설정 오류로 실패(종료 코드 2)
+   (rules 블록과 "next/core-web-vitals"는 유지)
 5) eslint.config.mjs 원복                      →           다시 케이스 7과 같은 실패
 6) page.tsx의 `any` 제거                       → 케이스 4:  npm run lint 성공
 7) git diff eslint.config.mjs src/app/page.tsx →           출력이 비어 있어야 한다
 ```
 
 7번의 `git diff`가 비어 있지 않으면 원복이 끝나지 않은 것이다. **완료 보고에 이 `git diff` 출력도 포함한다.**
+
+**케이스 14와 15가 서로 다른 것을 증명한다 (RR-02의 잔여 지적).**
+
+| 케이스 | 무엇을 제거하는가 | 남는 것 | 증명하는 것 |
+|---|---|---|---|
+| 14 | **규칙만** (`error` → `off`) | 플러그인은 로드됨 | `no-explicit-any`를 **켜는 주체**가 이 파일이다 |
+| 15 | **플러그인 제공자만** (`next/typescript` 확장) | 규칙 선언은 남음 | 그 규칙을 **해석 가능하게 만드는 주체**가 `next/typescript`다 |
+
+- **`...compat.config({ ... })` 블록 전체를 지우는 방식은 쓰지 않는다.** 그렇게 하면 규칙 선언까지 함께 사라져 남은 config에 `@typescript-eslint` 참조가 하나도 없게 되고, **설정 오류가 날 이유가 없어진다.** 즉 명세대로 정확히 구현해도 기대 결과를 만들 수 없다 — Codex Round 2가 지적한 지점이 이것이다.
+- 기대 오류의 근거: ESLint 9는 규칙 이름의 플러그인 네임스페이스를 `plugins`에서 찾지 못하면 `Key "rules": Key "<규칙>": Could not find plugin "<플러그인>" in configuration.`를 던진다. 공식 소스: [`eslint/lib/config/config.js` (v9.35.0) `throwRuleNotFoundError`](https://github.com/eslint/eslint/blob/v9.35.0/lib/config/config.js). 확인일 **2026-08-01**.
+- **다른 결과가 나오면 멈추고 보고한다.** 특히 케이스 15에서 (a) 설정 오류 없이 `no-explicit-any` 위반만 보고되거나 (b) 종료 코드 0이면, `@typescript-eslint` 플러그인이 `next/typescript` 아닌 곳에서 로드된다는 뜻이므로 **요구사항 18의 전제가 깨진 것이다.** 설정을 고쳐 맞추지 말고 `npm ls eslint-config-next @typescript-eslint/eslint-plugin`과 출력 전문을 함께 보고한다.
+- 메시지 문자열 전체를 완료 판정 기준으로 삼지 않는다. 판정 기준은 **종료 코드 2 + `Could not find plugin` 취지의 설정 오류**이며, 실제 출력을 그대로 보고한다.
 
 ### 경계 케이스
 
@@ -317,6 +342,10 @@ git status --porcelain                    → 변경 파일이 "변경 대상 �
 
 완료 보고에는 위 명령들과 위반 케이스 7·8·9·14·15의 **실제 출력**을 포함한다 (CLAUDE.md). 14·15 이후의 `git diff eslint.config.mjs src/app/page.tsx` 출력도 함께 낸다.
 
+**케이스 15는 종료 코드까지 보고한다** (RR-02). `npm run lint; echo "exit=$?"` 형태로 실행해 **`exit=2`(설정 오류)** 임을 보이고, 같은 방식으로 케이스 7이 **`exit=1`(lint 위반)** 임을 보인다. 둘의 종료 코드가 같으면 두 케이스가 서로 다른 것을 증명하지 못한 것이다.
+
+`npm run lint`는 요구사항 3의 의존성만 설치된 상태에서 **추가 설치 없이** 통과해야 한다 (요구사항 18·19). `npm ci` 직후 첫 `npm run lint`가 이 조건의 검증이다.
+
 ## 금지 사항
 
 - `create-next-app` 실행 금지. 기존 파일을 덮어쓸 위험이 있다.
@@ -325,6 +354,8 @@ git status --porcelain                    → 변경 파일이 "변경 대상 �
 - `engines.node`를 `">=22"` 같은 **하한 선언**으로 바꾸지 않는다. 지원 목록에 없는 23·25·27을 통과시킨다 (DR-03).
 - `.npmrc`를 만들거나 `engine-strict`를 설정하지 않는다. 게이트는 T02의 테스트다 (D21).
 - **`eslint.config.mjs`에서 `next/core-web-vitals`·`next/typescript` 확장이나 `@typescript-eslint/no-explicit-any: "error"`를 제거하지 않는다** (RR-02). 케이스 14·15는 검증용 임시 변경이며 반드시 원복한다.
+- **케이스 15를 `...compat.config({ ... })` 블록 전체 제거로 바꾸지 않는다** (RR-02). 규칙 선언이 함께 사라지면 기대한 설정 오류가 성립하지 않는다.
+- `.eslintrc`, `.eslintrc.json`, `.eslintrc.js` 등 **eslintrc 형식 파일을 만들지 않는다.** 설정 파일은 `eslint.config.mjs` 하나다 (요구사항 19).
 - ESLint 관련 패키지(`typescript-eslint`, `@typescript-eslint/*`, `eslint-plugin-*`)를 추가하지 않는다. 요구사항 18의 세 패키지로 충분해야 하며, 아니면 멈추고 보고한다.
 - Prisma, vitest, Playwright, Zod 등 후속 태스크의 의존성을 추가하지 않는다. `package.json`에는 위 목록의 패키지만 있어야 한다.
 - `src/domain/`, `src/server/`, `prisma/`, `tests/`, `e2e/` 디렉터리를 만들지 않는다.
@@ -349,5 +380,6 @@ git status --porcelain                    → 변경 파일이 "변경 대상 �
 | 8 | 폰트 | 시스템 폰트 스택만 사용한다 (요구사항 15) |
 | 9 | `package.json`의 `"type"` 필드 | 설정하지 않는다(기본 CommonJS). T03이 `tsx`로 스크립트를 실행할 때 설정이 단순해진다 |
 | 10 | `@types/node` 메이저 | `^22.0.0`. **허용 집합의 최소 메이저이자 CI 기준선인 22에 맞춘다** — 타입 하한을 기준선에 맞추면 24·26에서만 존재하는 API를 실수로 쓰는 것을 컴파일 단계에서 막는다 (D21) |
-| 11 | ESLint 설정 형식 | **ESLint 9 flat config (`eslint.config.mjs`) 하나.** `.eslintrc*`를 만들지 않는다. `eslint-config-next`가 eslintrc 형식이므로 `FlatCompat`으로 변환해 쓴다 (요구사항 17, RR-02) |
+| 11 | ESLint 설정 형식 | **ESLint 9 flat config (`eslint.config.mjs`) 하나.** 저장소에 기존 `.eslintrc*`가 없으므로 **삭제할 파일도 없다.** 새로 만들지도 않는다. `eslint-config-next`가 eslintrc 형식이므로 `FlatCompat`으로 변환해 쓴다 (요구사항 17·19, RR-02) |
 | 12 | `next lint` 사용 여부 | **쓰지 않는다.** `lint` 스크립트는 `eslint .`이며 ESLint를 직접 부른다. `next lint`는 Next 버전에 따라 동작·설정 탐색이 달라지고, T02의 CI도 같은 `npm run lint`를 호출해야 한다 |
+| 13 | `@typescript-eslint` 플러그인의 공급자 | **`next/typescript` 확장 하나.** base config(`next` / `next/core-web-vitals`)는 TS 파일의 **파서만** 지정하고 플러그인을 등록하지 않는다 — 공식 소스 근거는 요구사항 18에 있다. 이 사실이 케이스 15의 기대 결과를 성립시킨다 (RR-02) |

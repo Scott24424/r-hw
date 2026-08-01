@@ -1,8 +1,8 @@
 # Workflow Status
 
 - current_branch: docs/specs-batch1
-- stage: spec-rereview-complete
-- doc_status: changes-required
+- stage: spec-revision
+- doc_status: ready-for-rereview
 - active_tasks: T01, T02, T03, T04
 - spec_writer: claude
 - spec_reviewer: codex
@@ -13,8 +13,8 @@
 - original_review_file: docs/reviews/DR-T01-T04-spec-review.md
 - original_review_commit: b4511c7
 - rereview_base_commit: c77ab5c33122da5fd3414e1ed054fe22224506fc
-- revision_round: 2
-- revision_baseline_commit: 944fe85
+- revision_round: 3
+- revision_baseline_commit: 8b8c0512af62cb00902ca50901159590a5b4ebb9
 - overall_verdict: BLOCK
 - T01_verdict: BLOCK
 - T02_verdict: PASS
@@ -22,17 +22,20 @@
 - T04_verdict: BLOCK
 - implementation_allowed: false
 - requirements_file: docs/requirements.md
-- requirements_source: user statements of 2026-08-01 (requirements + AP-01..AP-12 decisions + OPEN-01 decision) + both mockups
+- requirements_source: user statements of 2026-08-01 (requirements + AP-01..AP-12 decisions + OPEN-01 decision + OPEN-02 decision) + both mockups
 - unapproved_design_assumptions: 0
-- open_implementation_details: 1
-- next_action: Claude fixes Round 2 residual and new findings; then Codex independently rereviews
-- next_owner: claude
+- open_implementation_details: 0
+- open_implementation_detail_ids: (none) — OPEN-01, OPEN-02 both decided by the user on 2026-08-01
+- next_action: Codex independent rereview of the Claude revision (DR-12, RR-01, RR-02, R2-01..R2-05 + the OPEN-02 closure)
+- next_owner: codex
 
 ## Verdict ownership
 
-**Only Codex changes finding verdicts.** Claude is the spec author and does not mark its own work `RESOLVED` or `PASS`. Claude가 제출한 `addressed_by_claude` / `pending_codex_verification` 이력은 아래에 보존하고, 현재 `overall_verdict`와 태스크별 판정은 Codex의 Round 2 결과다.
+**Only Codex changes finding verdicts.** Claude is the spec author and does not mark its own work `RESOLVED` or `PASS`. 아래 revision 3의 항목은 전부 `addressed_by_claude` / `pending_codex_verification`이며, **현재 `overall_verdict`와 태스크별 판정은 Codex Round 2의 결과 그대로다.** Claude는 그 값을 바꾸지 않았다.
 
-`doc_status`는 Round 2에서 잔여·신규 결함이 확인됐으므로 `changes-required`다. `implementation_allowed`는 계속 `false`다.
+`remaining_P1` / `remaining_P2` / `remaining_P3`도 **Codex Round 2 값을 그대로 둔다.** Claude가 수정했다는 사실만으로 0으로 내리지 않는다.
+
+`doc_status`는 `OPEN-02`가 2026-08-01 사용자 승인으로 종결되면서 `blocked-on-user-decision` → `ready-for-rereview`로 바뀌었다. **그것은 "문서가 검토 받을 준비가 됐다"는 뜻일 뿐 Finding이 해소됐다는 뜻이 아니다.** `implementation_allowed`는 계속 `false`이고, 8개 Finding은 전부 Codex 검증 대기 상태다.
 
 ## Finding Status
 
@@ -50,7 +53,7 @@
 - remaining_P3: 0
 - remaining_P0_P1: 5
 
-### Round 2 — Codex verdict at target `2557d75`
+### Round 2 — Codex verdict at target `2557d75` (변경 없음)
 
 - rereviewed_existing_findings_total: 7
 - existing_resolved_round2: 4
@@ -68,7 +71,7 @@
 - remaining_P3: 2
 - remaining_P0_P1: 2
 
-| Finding | Codex Round 2 verdict | Remaining issue |
+| Finding | Codex Round 2 verdict | Remaining issue (Codex 기록) |
 |---|---|---|
 | DR-03 | RESOLVED | — |
 | DR-07 | RESOLVED | — |
@@ -86,6 +89,21 @@
 | R2-04 | P2 | T04 — creation-stage rollback test gap |
 | R2-05 | P3 | architecture — pilot date/overdue count mismatch |
 
+### Revision 3 — Claude 수정 (baseline `8b8c051`, 미커밋)
+
+**모든 항목의 상태는 `addressed_by_claude` / `pending_codex_verification`이다. RESOLVED 판정은 다음 Codex 독립 재검토에서만 나온다.**
+
+| Finding | 상태 | 무엇을 고쳤는가 |
+|---|---|---|
+| DR-12 | addressed_by_claude / pending_codex_verification | T03에 `DB_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"]` 단일 정의처(12-A)를 두어 rollback journal을 정리 대상에 포함. 13-A에 `beforeMetaFinalizeHook` seam과 **DB rename 이후 실패 경로(3'-b)** 추가 — 최종 meta를 지워 다음 호출이 강제 재생성하게 한다. 케이스 16을 "cleanup 전 sidecar 존재 단정 + 이후 4경로 부재"로 바꾸고, **cleanup이 sidecar를 직접 지운다는 것을 증명하는 16-a**(연결이 없는 상태에서 파일을 다시 만든 뒤 재호출) 추가. 13-10에 조기 반환 금지 명시. 13-11로 정리 범위를 `<root>/.tmp/` 안으로 한정하고 개발 DB 불변을 16e로 검증. 신규 mutation 24c·24d, 경계 31, 완료 조건 `ls -A .tmp/` 추가 |
+| RR-01 | addressed_by_claude / pending_codex_verification | requirements의 자기 검사를 실제 ID 집합에서 다시 산출 — base UR **26**, 조건 **31**, OR 3, MR 23, NR 9, OPEN **1**. **이후 `OPEN-02` 결정으로 `UR-25.4`·`UR-25.5`가 추가되어 현재 값은 조건 33 · OPEN 0이다** (아래 "OPEN-02 — decided"). 조건 전부의 반영 위치를 §8.1-b 표로 신설. §8.3에 ID 개수 표·중복 검사·값 충돌 검사 행 추가. `OPEN-02`를 §7/§7.1에 기록해 "미결 0건" 주장을 제거. R2-01·R2-02·R2-03의 개별 수정은 아래 각 행 |
+| RR-02 | addressed_by_claude / pending_codex_verification | T01 케이스 15를 **`extends`에서 `next/typescript`만 제거**(규칙은 유지)하는 mutation으로 교체. 기대 결과를 `Key "rules": ... Could not find plugin "@typescript-eslint" in configuration.` + **종료 코드 2**로 고정. 근거로 `eslint-config-next` v15.5.4 공식 소스(플러그인은 `typescript.js`에서만 등록, base는 파서만 지정)와 ESLint v9.35.0 `config.js`의 오류 생성 코드를 URL·확인일과 함께 기록. 요구사항 19로 "ESLint 설정 파일은 `eslint.config.mjs` 하나, 삭제할 레거시 파일 없음"을 명시 |
+| R2-01 | addressed_by_claude / pending_codex_verification | architecture §6.2-1의 `44×44px`을 **`48×48px`**로 통일하고 정의처가 UR-20임을 명시. §6.4에 "화면별로 다른 값을 쓰지 않는다 · 너비와 높이 둘 다 48px 이상 · 후속 화면 태스크의 인수/E2E 기준도 같은 값" 규칙 추가. requirements §8.1의 UR-20 행과 §8.2에 값 정의처 기록. **규범적으로 `44×44px`을 지시하는 문장 0건** — 남은 `44×44` 언급은 architecture §6.4의 "쓰지 않는다"는 금지 문장과 이 STATUS의 Finding 기록뿐이다 |
+| R2-02 | addressed_by_claude / pending_codex_verification | 집계는 실제 ID에서 재산출(위 RR-01). 정책은 Claude가 정하지 않고 `OPEN-02`로 사용자에게 올렸으며, **2026-08-01 사용자 승인으로 종결**되어 `UR-25.4`(원자적 전부 롤백)·`UR-25.5`(동일 상태 멱등 no-op)로 승격 → **`open_implementation_details: 0`**. 결정 기록은 `decisions.md` **D22**, 계약은 architecture §5.2, 최소 테스트 조건 5건은 부록 C.3·§7.2, 담당은 T09(API)·T17(화면)로 배치 1 범위 밖. **T01~T04 범위 밖임을 세 문서에 함께 명시.** 추적성 검사 중 발견한 추가 결함도 함께 수정 — 부록 C.3이 지시하는 `POST /api/assignments/bulk-status`가 architecture §5.2의 API 표에 **없었다.** 요청 계약(`{ date, to }`)·적용 대상·`OPEN-02` 표시와 함께 표에 추가하고, 엔드포인트는 T09·진입 화면은 T17이라는 소유 구분을 명시했다 |
+| R2-03 | addressed_by_claude / pending_codex_verification | 원본 `daily-schedule.jpg`를 다시 관찰해 MR-22를 **`9건` → `8건`**으로 정정하고 시점 2 + 범위 8 = 10건을 명시. 8건의 시각 목록을 MR-22에 나열. architecture §0.2 F11에도 같은 수를 기록해 UR-24.5·부록 C.1·T04와 값이 하나가 되게 함 |
+| R2-04 | addressed_by_claude / pending_codex_verification | T04에 `afterBlocksHook`·`afterAssignmentsHook` 두 seam을 트랜잭션 **안**에 추가(요구사항 2의 5·7단계). 요구사항 2-A에 seam별 반증 대상 표, 2-B에 **호출 전 스냅샷과의 deep equal** 판정 계약(fixture 비교 금지)을 신설. 신규 테스트 18b(빈 DB)·18c(사용자 데이터 + force)·18d(과제 생성 이후), 신규 mutation 29b·29c(생성 단계를 트랜잭션 밖으로 옮기면 실패), 완료 조건에 롤백 테스트 4개 이름 명시. `main()`은 `{ force }`만 넘긴다는 규칙과 금지 사항 추가 |
+| R2-05 | addressed_by_claude / pending_codex_verification | architecture 부록 C.3의 기준일을 **`2026-08-01`로 고정**하고 "오늘" 표현을 제거. 지난 날짜 7/29·7/30·7/31과 날짜별 시드 과제 수(2+2+2=6)를 표로 계산해 **밀린 6건**의 근거를 명시. 밀림 정의(§3.4)와 파생 `OVERDUE`(D7·UR-18)를 함께 참조하고, 기준일이 7/31이면 4건이 된다는 대응 관계도 남김 |
+
 ### Round 2 제출 당시 Claude revisions — historical pending state
 
 | Finding | Codex round 1 verdict | Claude round 2 state | What changed |
@@ -97,6 +115,24 @@
 | RR-01 | NEW (P1) | `addressed_by_claude` / `pending_codex_verification` | `docs/requirements.md` written from the user's authoritative statements plus direct observation of both mockups. IDs assigned; AP-01…AP-12 resolved by user decision on 2026-08-01; bidirectional traceability run |
 | RR-02 | NEW (P1) | `addressed_by_claude` / `pending_codex_verification` | T01 requirements 17–18 restore the full ESLint 9 flat config (FlatCompat, `next/core-web-vitals`, `next/typescript`, `no-explicit-any: error`, three ignores) plus mutation cases 14–15 |
 | RR-03 | NEW (P2) | `addressed_by_claude` / `pending_codex_verification` | T04 requirement 20 adds an exact-match test for the `db:setup` string; completion check runs `npm run db:setup` itself against a fresh temp DB; mutation cases 31–32 |
+
+## OPEN-02 — decided 2026-08-01 (user approval)
+
+**`bulk-status`의 일부 실패 처리 정책이 확정되어 `OPEN-02`가 종결됐다.** 이로써 `open_implementation_details`는 **0**이다.
+
+| 결정 항목 | 승인된 값 | 승격된 요구 ID |
+|---|---|---|
+| **OPEN-02.1** 실패 원자성 | **전부 성공하거나 전부 롤백.** 실제 실패 항목이 1건이라도 있으면 요청 전체를 롤백한다. 부분 성공 없음. 쓰기는 단일 트랜잭션. 실제 실패 = 존재하지 않는 과제 · 허용되지 않는 상태 전이 · 권한 오류 · 검증 오류 | **UR-25.4** |
+| **OPEN-02.2** 동일 상태 재적용 | **성공하는 멱등 no-op.** 데이터를 바꾸지 않고 성공으로 집계하며 실패로 세지 않는다. 이미 `DONE`인 과제에 `DONE`을 보내도 전체 롤백이 일어나지 않는다. 재시도해도 결과가 같다 | **UR-25.5** |
+
+반영 위치:
+
+- `requirements.md` — §0 분류표(OPEN 0건), §1.3의 `UR-25.4`·`UR-25.5`, §7 표와 §7.1(결정 기록), §8.1의 UR-25 행, §8.1-b의 UR-25.2~25.5 행, §8.2의 D22 행, §8.3 집계
+- `decisions.md` — **D22** 신설(선택 / 기각한 대안 2건 / 이유 / 남는 대가), 색인과 요구사항 추적 표에 등록
+- `architecture.md` — §2 결정 색인, §5.2의 `bulk-status` 행과 **요청·응답 최소 계약**, §7.2 통합 테스트 행, 부록 C.3의 정책 표와 **최소 테스트 조건 5건**, 부록 A.2(T17)·A.3(T09), 사용자 확정 사항 표, "미해결 질문"
+- T01~T04 SPEC — **변경 없음.** `bulk-status`는 배치 1의 범위가 아니다 (엔드포인트 T09 · 화면 T17, 둘 다 예약 번호)
+
+**이 결정은 Finding 판정과 무관하다.** DR-12·RR-01·RR-02·R2-01~R2-05는 여전히 `addressed_by_claude` / `pending_codex_verification`이며, RESOLVED 판정은 Codex 독립 재검토에서만 나온다.
 
 ## User decisions of 2026-08-01 — AP-01 … AP-12
 
@@ -117,6 +153,9 @@ All twelve are resolved. **No unapproved design assumption remains.**
 | AP-11 | approved with conditions | UR-24, UR-24.1 … UR-24.6 |
 | AP-12 | approved | UR-25, UR-25.1 … UR-25.3 |
 | — | OPEN-01 decided | UR-26, UR-26.1 … UR-26.6 |
+| — | **OPEN-02 decided** | **UR-25.4, UR-25.5** (설계 결정 **D22**) |
+
+**조건 총계는 33건이다** (base UR 26건). AP 결정으로 31건이었고, `OPEN-02` 결정으로 `UR-25.4`·`UR-25.5` 2건이 추가됐다. 전체 목록과 반영 위치는 `docs/requirements.md` §8.1-b에 있다 — 이전의 "22건" 표기는 실제 ID 집합과 달라 정정했다 (R2-02).
 
 ### AP-03 rejection — data model change
 
@@ -126,7 +165,7 @@ All twelve are resolved. **No unapproved design assumption remains.**
 
 ## OPEN-01 — decided 2026-08-01
 
-**Which date the 10 seeded schedule blocks belong to: `2026-07-29`.** Promoted to `UR-26` with conditions `UR-26.1`…`UR-26.6`. **OPEN-01 자체는 해결됐다.** 다만 Codex Round 2는 별개의 UR-25.3 실패 정책을 미결 구현 상세 1건으로 판정했다(R2-02).
+**Which date the 10 seeded schedule blocks belong to: `2026-07-29`.** Promoted to `UR-26` with conditions `UR-26.1`…`UR-26.6`. 별개의 미결이던 `OPEN-02`(UR-25.3의 실패 정책)도 같은 날 결정되어 위 "OPEN-02 — decided" 절에 있다. **두 OPEN 모두 닫혔다.**
 
 - The date is **user-designated**, not read from `daily-schedule.jpg` (which has no date, MR-20). Documents must not claim it was read from the image — same property as the year `2026` under UR-15.3.
 - **The other 19 days having no schedule is intended behaviour** (UR-26.2, UR-26.4), not a defect, and must not be reported as a failure. Schedule templates are outside the MVP (UR-26.3, NR-03); users enter each day's schedule (UR-26.5).
@@ -137,4 +176,4 @@ All twelve are resolved. **No unapproved design assumption remains.**
 
 `implementation_allowed` is `false`. No implementation, package install, DB operation, branch change, commit, push, PR, merge, or deployment is authorized by this status.
 
-Round 2 재검토는 완료됐다. **다음 담당자는 Claude**이며, Round 2 리뷰의 잔여 Finding 3건과 신규 Finding 5건을 문서에서 수정한 뒤 Codex 독립 재검토를 다시 요청한다.
+Claude의 revision 3 수정이 끝났고, 그 안에 남아 있던 유일한 사용자 결정(`OPEN-02`)도 2026-08-01에 승인·반영됐다. **다음 담당자는 Codex**이며, 이번 수정본을 독립 재검토해 각 Finding의 RESOLVED 여부와 `implementation_allowed`를 판정한다. Claude는 자신의 수정을 RESOLVED로 판정하지 않았고 Codex Round 2의 판정·리뷰 원문도 바꾸지 않았다.

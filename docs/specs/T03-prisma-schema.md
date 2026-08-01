@@ -248,10 +248,16 @@ export interface CreateTestDbOptions {
   afterCopyHook?: () => void | Promise<void>;
 
   /**
-   * 템플릿 생성 중 migrate 성공 직후·rename 직전에 호출된다.
+   * 템플릿 생성 중 migrate 성공 직후·템플릿 DB rename 직전에 호출된다.
    * 템플릿 생성 실패 정리를 검증하기 위한 테스트 전용 seam (DR-12).
    */
   beforeTemplateFinalizeHook?: () => void | Promise<void>;
+
+  /**
+   * 템플릿 DB rename 성공 직후·meta 확정 전에 호출된다.
+   * "DB 교체 이후 실패" 경로를 검증하기 위한 테스트 전용 seam (DR-12 잔여 2).
+   */
+  beforeMetaFinalizeHook?: () => void | Promise<void>;
 
   /**
    * 이 호출에 한해 기존 템플릿을 무시하고 다시 만든다.
@@ -269,6 +275,21 @@ export async function cleanupAllTestDbs(): Promise<void>;
 export function computeMigrationsFingerprint(migrationsDir: string): string;
 ```
 
+12-A. **SQLite 하나가 만들 수 있는 파일의 전체 집합을 상수로 고정한다 (DR-12 잔여 1).** 정리 대상은 이 상수에서만 나온다 — 목록을 손으로 여러 곳에 적지 않는다.
+
+```ts
+/** SQLite DB 하나가 만들 수 있는 파일의 접미사 전체. 정리 대상의 단일 정의처. */
+const DB_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
+
+/** 주어진 DB 경로가 만들 수 있는 모든 파일 경로 (본체 + sidecar 3종). */
+const dbFilePaths = (dbPath: string): string[] =>
+  DB_FILE_SUFFIXES.map((suffix) => `${dbPath}${suffix}`);
+```
+
+- **`-journal`이 목록에 있는 이유:** 템플릿 DB에는 WAL을 적용하지 않으므로(13-6) 마이그레이션은 **기본 rollback journal 모드**로 돈다. 그 경로에서 실패하면 `<db>-journal`이 남을 수 있고, `-wal`·`-shm`만 지우는 구현은 그것을 놓친다 (DR-12 잔여 1).
+- 복사본 DB는 WAL을 켜지만(13-6) **WAL 적용 전 구간에서는 `-journal`이 생길 수 있으므로** 같은 목록을 쓴다. 없는 파일은 오류가 아니다 (13-B의 2).
+- `.meta.json`은 DB 파일이 아니므로 이 상수에 넣지 않고 13-A가 따로 다룬다.
+
 13. 동작 규칙 (DR-12에 대한 응답이다. 각 항목이 리뷰가 지적한 구멍을 하나씩 막는다).
 
 | # | 규칙 | 막는 구멍 |
@@ -279,10 +300,11 @@ export function computeMigrationsFingerprint(migrationsDir: string): string;
 | 13-4 | 템플릿 생성은 유일한 임시 이름(`test-template.<pid>-<랜덤>.db`)에 마이그레이션을 적용한 뒤 `fs.renameSync`로 최종 경로에 옮긴다. meta도 유일한 임시 이름(`test-template.<pid>-<랜덤>.meta.json`)에 쓴 뒤 rename 한다 | 워커 동시 진입 시 반쯤 만들어진 템플릿을 읽는 문제 |
 | 13-5 | 자식 프로세스 환경은 **반드시 `{ ...process.env, DATABASE_URL: <임시 템플릿의 절대 file URL> }`** 로 넘긴다 | `env: { DATABASE_URL }`만 넘기면 `PATH`가 사라져 macOS arm64 Homebrew 환경에서 실행 파일 탐색이 실패한다 |
 | 13-6 | 템플릿에는 WAL을 적용하지 않는다. 복사본마다 `enableWal`을 적용한다 | WAL 상태 DB를 `-wal` 없이 복사할 때의 애매함 |
-| 13-7 | **템플릿 생성 전체**(migrate · rename · meta write)를 `try/catch`로 감싸고, 실패 시 그 호출이 만든 임시 파일 4종을 **전부** 지운 뒤 다시 throw 한다 → 요구사항 13-A | migrate·rename·meta write 실패 시 임시 템플릿과 sidecar가 `.tmp/`에 남는 문제 (DR-12) |
-| 13-8 | 복사 이후의 모든 단계를 `try/catch`로 감싸고, **실패 시 그때까지 만든 `.db`/`.db-wal`/`.db-shm`을 지우고 다시 throw 한다** | 반환 전에 실패하면 cleanup 핸들이 없어 파일이 누적되는 문제 |
+| 13-7 | **템플릿 생성 전체**(migrate · DB rename · meta write · meta rename)를 `try/catch`로 감싸고, 실패 시 그 호출이 만든 임시 파일을 **전부**(`dbFilePaths(tmpDb)` 4종 + `tmpMeta`) 지운 뒤 다시 throw 한다 → 요구사항 13-A | migrate·rename·meta write 실패 시 임시 템플릿과 sidecar(`-journal` 포함)가 `.tmp/`에 남는 문제 (DR-12) |
+| 13-8 | 복사 이후의 모든 단계를 `try/catch`로 감싸고, **실패 시 그때까지 만든 `dbFilePaths(<복사본>)` 4종을 지우고 다시 throw 한다** | 반환 전에 실패하면 cleanup 핸들이 없어 파일이 누적되는 문제 |
 | 13-9 | 만들어진 모든 DB를 모듈 수준 registry에 등록하고, `cleanup()`이 성공하면 registry에서 제거한다. `cleanupAllTestDbs()`는 남은 전부를 정리한다 | 테스트가 직접 만든 추가 DB의 누락, assertion 실패로 인한 누수 |
-| 13-10 | `cleanup()`은 `$disconnect()` 후 `.db`, `.db-wal`, `.db-shm` 세 파일을 지운다. 없으면 무시하고, 두 번 불려도 오류가 없다. 정리는 요구사항 13-B의 best-effort 계약을 따른다 | sidecar 파일 누적 |
+| 13-10 | `cleanup()`은 `$disconnect()` 후 **`dbFilePaths(filePath)` 4종을 전부** unlink 한다. 없으면 무시하고, 두 번 불려도 오류가 없다. **"이미 정리했다"는 상태 플래그로 조기 반환하지 않는다** — 두 번째 호출도 네 경로의 unlink를 다시 시도한다 (정상 케이스 16-a가 이 성질을 쓴다). 정리는 요구사항 13-B의 best-effort 계약을 따른다 | sidecar 파일 누적, `$disconnect()`가 지워준 것을 cleanup의 성과로 오인하는 문제 (DR-12 잔여 3) |
+| 13-11 | **모든 테스트 DB와 템플릿은 `<root>/.tmp/` 아래에만 만든다.** registry에 `<root>/.tmp/` 밖의 경로를 등록하지 않고, `cleanup()`·`cleanupAllTestDbs()`는 그 디렉터리 밖의 파일을 **어떤 경우에도 지우지 않는다.** 특히 `prisma/dev.db`와 그 sidecar는 이 헬퍼의 정리 대상이 아니다 | 개발 DB가 테스트 정리에 휩쓸리는 사고 (DR-11과 같은 성질의 위험) |
 
 **13-A. 템플릿 생성 자식 명령과 실패 정리 (DR-12).**
 
@@ -295,14 +317,28 @@ export function computeMigrationsFingerprint(migrationsDir: string): string;
 2) 자식 프로세스로 마이그레이션 적용            ← 실패 시 3'
 3) beforeTemplateFinalizeHook?.()              ← 실패 시 3'  (테스트 전용 seam)
 4) fs.renameSync(tmpDb, <root>/.tmp/test-template.db)      ← 실패 시 3'
-5) tmpMeta에 { "fingerprint": "..." } 쓰기                  ← 실패 시 3'
-6) fs.renameSync(tmpMeta, <root>/.tmp/test-template.meta.json) ← 실패 시 3'
+5) beforeMetaFinalizeHook?.()                              ← 실패 시 3'  (테스트 전용 seam)
+6) tmpMeta에 { "fingerprint": "..." } 쓰기                  ← 실패 시 3'
+7) fs.renameSync(tmpMeta, <root>/.tmp/test-template.meta.json) ← 실패 시 3'
 
-3') 정리 대상(존재하지 않으면 무시):
-      tmpDb, tmpDb + "-wal", tmpDb + "-shm", tmpMeta
-    정리 후 원래 오류를 다시 throw 한다 (요구사항 13-B).
-    이미 rename된 최종 템플릿·meta는 건드리지 않는다.
+3') 공통 정리 대상(존재하지 않으면 무시):
+      dbFilePaths(tmpDb)  = tmpDb, tmpDb+"-wal", tmpDb+"-shm", tmpDb+"-journal"
+      tmpMeta
+    (12-A의 상수를 쓴다. 목록을 여기에 손으로 다시 적지 않는다.)
+
+3'-a) 4단계(템플릿 DB rename)에 **도달하기 전** 실패한 경우:
+      위 공통 정리만 하고 원래 오류를 다시 throw 한다.
+      최종 test-template.db / test-template.meta.json은 호출 전 상태 그대로다.
+
+3'-b) 4단계가 **성공한 뒤** 실패한 경우(5·6·7단계):
+      공통 정리에 더해 최종 meta인 <root>/.tmp/test-template.meta.json을 **삭제한다.**
+      최종 test-template.db는 지우지 않는다 — 다른 워커가 열고 있을 수 있다.
+      그 뒤 원래 오류를 다시 throw 한다.
 ```
+
+**3'-b가 필요한 이유 (DR-12 잔여 2).** 4단계 이후에는 최종 템플릿 DB가 **이미 교체된 상태**이므로 "호출 전 상태를 그대로 보존한다"는 계약은 성립할 수 없다. 대신 **다음 호출이 반드시 템플릿을 다시 만들도록** 만든다: 13-3이 "meta가 없으면 템플릿을 다시 만든다"이므로, 최종 meta를 지우면 새 DB·낡은 meta 조합이 남을 수 없다. 즉 이 경로의 계약은 **"이전 상태 복원"이 아니라 "다음 호출에서의 강제 재생성"** 이며, 정상 케이스 16d가 그것을 검증한다.
+
+**정리 실패는 원래 오류를 가리지 않는다** (13-B의 4). 3'-b의 최종 meta 삭제가 실패해도 `console.warn`으로 남기고 원래 오류를 그대로 throw 한다.
 
 **자식 명령은 아래로 고정한다.** 구현자가 고르지 않는다.
 
@@ -336,7 +372,7 @@ export function computeMigrationsFingerprint(migrationsDir: string): string;
    | 둘 다 성공 | 정상 반환 |
 
    원래 오류를 감싸거나 교체하지 않는 이유는 **실패의 진짜 원인이 스택 트레이스에서 사라지면 안 되기 때문**이다. 정리 실패는 진단 정보이지 근본 원인이 아니다.
-5. `cleanup()`은 멱등이다. 두 번째 호출은 지울 것이 없으므로 오류 없이 끝난다 (경계 케이스 30).
+5. `cleanup()`은 멱등이다. 두 번째 호출은 지울 것이 없으면 오류 없이 끝난다 (경계 케이스 30). **다만 "이미 호출됐다"는 플래그로 조기 반환하지 않는다** (13-10) — 두 번째 호출도 네 경로의 unlink를 시도하며, 그 사이에 파일이 다시 생겼다면 지운다. 이 성질이 정상 케이스 16-a를 결정적으로 만든다 (DR-12 잔여 3).
 
 14. `createTestDb()`는 **시드를 실행하지 않는다.** 빈 DB가 기본값이며, 시드가 필요한 테스트가 직접 시드 함수를 부른다 (T04).
 
@@ -402,10 +438,13 @@ describe("스키마 구조", () => {
 describe("테스트 DB 헬퍼", () => {
   it("서로 격리된 DB를 만든다", ...);
   it("만들어진 DB에 WAL이 적용된다", ...);
-  it("cleanup이 db·wal·shm 세 파일을 모두 지운다", ...);
+  it("cleanup 전에 wal·shm sidecar가 실제로 존재하고 cleanup 후 네 경로가 모두 사라진다", ...);
+  it("cleanup이 sidecar 파일을 직접 지운다", ...);
   it("생성 중 실패하면 부분 생성 파일을 남기지 않는다", ...);
   it("템플릿 생성 중 실패하면 임시 템플릿 파일을 남기지 않는다", ...);
   it("템플릿 생성 실패는 원래 오류를 그대로 전파한다", ...);
+  it("템플릿 DB 교체 후 실패하면 다음 호출이 템플릿을 다시 만든다", ...);
+  it("헬퍼는 .tmp 밖의 파일을 정리 대상으로 삼지 않는다", ...);
   it("지문은 내용이 바뀌면 달라진다", ...);
   it("지문은 파일 나열 순서에 무관하다", ...);
   it("템플릿 지문이 다르면 템플릿을 다시 만든다", ...);
@@ -533,7 +572,10 @@ describe("테스트 DB 헬퍼", () => {
 | 스키마와 마이그레이션이 일치한다 | `npm run db:diff`가 종료 코드 2 (drift 감지) |
 | WAL 적용 (D16-e) | `npm run db:wal` 종료 코드 1 |
 | 테스트 DB는 생성 실패 시에도 파일을 남기지 않는다 (DR-12) | `생성 중 실패하면 부분 생성 파일을 남기지 않는다`가 실패 |
-| 템플릿 생성은 어느 단계에서 실패해도 임시 파일을 남기지 않는다 (DR-12) | `템플릿 생성 중 실패하면 임시 템플릿 파일을 남기지 않는다`가 실패 |
+| 템플릿 생성은 어느 단계에서 실패해도 임시 파일을 남기지 않는다. **정리 대상은 `-wal`·`-shm`뿐 아니라 `-journal`과 임시 meta를 포함한다** (DR-12, 12-A) | `템플릿 생성 중 실패하면 임시 템플릿 파일을 남기지 않는다`가 실패 |
+| **템플릿 DB 교체 이후에 실패하면 최종 meta를 지워 다음 호출이 재생성하게 한다** (DR-12, 13-A의 3'-b) | `템플릿 DB 교체 후 실패하면 다음 호출이 템플릿을 다시 만든다`가 실패 |
+| **`cleanup()`이 sidecar를 직접 지운다.** `$disconnect()`가 지워준 것에 의존하지 않는다 (DR-12, 13-10) | `cleanup이 sidecar 파일을 직접 지운다`가 실패 |
+| **헬퍼의 정리 범위는 `<root>/.tmp/` 안으로 한정된다.** 개발 DB는 정리 대상이 아니다 (13-11) | `헬퍼는 .tmp 밖의 파일을 정리 대상으로 삼지 않는다`가 실패 |
 | 실패 정리는 원래 오류를 가리지 않는다 (DR-12, 13-B) | `템플릿 생성 실패는 원래 오류를 그대로 전파한다`가 실패 |
 | 템플릿 생성 자식 명령은 `npm run db:deploy`다 (DR-12, 13-A) | `npx prisma`를 직접 부르면 요구사항 9와 금지 사항 위반. 완료 조건의 `env -u DATABASE_URL` 검증과도 경로가 갈라진다 |
 
@@ -558,16 +600,22 @@ describe("테스트 DB 헬퍼", () => {
 | 13 | `enum 컬럼에는 CHECK 제약이 없다` | 같은 파일 | `sqlite_master.sql` | 세 테이블의 DDL에 `CHECK`가 없다 (요구사항 3) |
 | 14 | `서로 격리된 DB를 만든다` | 같은 파일 | `createTestDb()` 2회, 한쪽에만 Book 1건 생성 | 다른 쪽의 Book 수가 0, 두 `filePath`가 다름 |
 | 15 | `만들어진 DB에 WAL이 적용된다` | 같은 파일 | `getJournalMode` | `"wal"` |
-| 16 | `cleanup이 db·wal·shm 세 파일을 모두 지운다` | 같은 파일 | `cleanup()` 후 파일 확인 | 세 경로 모두 부재 |
-| 16b | `템플릿 생성 중 실패하면 임시 템플릿 파일을 남기지 않는다` | 같은 파일 | `createTestDb({ forceTemplateRebuild: true, beforeTemplateFinalizeHook: () => { throw new Error("template boom"); } })` | 호출이 reject되고, `.tmp/`에 `test-template.<pid>-*` 패턴의 `.db`·`-wal`·`-shm`·`.meta.json`이 **0건**이다. 최종 `test-template.db`/`.meta.json`은 호출 전 상태 그대로다 (13-A) |
+| 16 | `cleanup 전에 wal·shm sidecar가 실제로 존재하고 cleanup 후 네 경로가 모두 사라진다` | 같은 파일 | `createTestDb()` → `prisma.book.create(...)`로 **쓰기를 1회 수행** → **연결이 열려 있는 상태에서** `-wal`·`-shm` 존재를 단정 → `cleanup()` | 단정 1: cleanup **전에** `<filePath>-wal`과 `<filePath>-shm`이 **존재한다**(전제 확인 — 존재하지 않으면 이 테스트는 아무것도 증명하지 못하므로 여기서 실패해야 한다). 단정 2: cleanup 후 `dbFilePaths(filePath)` **네 경로 전부 부재** |
+| 16-a | `cleanup이 sidecar 파일을 직접 지운다` | 같은 파일 | **이 테스트가 자체적으로** `createTestDb()` → `cleanup()` → `dbFilePaths(filePath)`의 **네 경로를 모두 빈 파일로 만든 뒤** → `cleanup()`을 **한 번 더** 호출 (앞선 테스트의 상태에 의존하지 않는다) | 네 경로 전부 부재. **SQLite/`$disconnect()`가 지운 것이 아니라 `cleanup()`이 지운다는 것을 결정적으로 고정한다** — 이 시점에는 열린 연결이 없으므로 파일을 지울 주체가 `cleanup()`뿐이다 (DR-12 잔여 3). 13-10의 "조기 반환 금지"가 이 테스트의 전제다 |
+| 16b | `템플릿 생성 중 실패하면 임시 템플릿 파일을 남기지 않는다` | 같은 파일 | `createTestDb({ forceTemplateRebuild: true, beforeTemplateFinalizeHook: () => { throw new Error("template boom"); } })` | 호출이 reject되고, `.tmp/`에 `test-template.<pid>-*` 패턴의 `.db`·`-wal`·`-shm`·**`-journal`**·`.meta.json`이 **0건**이다. 최종 `test-template.db`/`.meta.json`은 호출 전 상태 그대로다 (13-A의 3'-a) |
 | 16c | `템플릿 생성 실패는 원래 오류를 그대로 전파한다` | 같은 파일 | 16b와 같은 호출 | reject된 오류가 `beforeTemplateFinalizeHook`이 던진 그 오류이며 message가 `"template boom"`이다. 정리 오류로 감싸이거나 교체되지 않는다 (13-B의 4) |
+| 16d | `템플릿 DB 교체 후 실패하면 다음 호출이 템플릿을 다시 만든다` | 같은 파일 | ① `createTestDb({ forceTemplateRebuild: true, beforeMetaFinalizeHook: () => { throw new Error("meta boom"); } })` → ② 이어서 `createTestDb()` | ①이 `"meta boom"`으로 reject되고, 그 직후 **`.tmp/test-template.meta.json`이 존재하지 않으며**(13-A의 3'-b) 임시 파일 5종도 0건이다. ②는 정상적으로 성공하고, 그 뒤 meta의 `fingerprint`가 `computeMigrationsFingerprint(<root>/prisma/migrations)` 값과 같다. **DB rename 이후 실패 경로가 실제로 존재하고 검증된다** (DR-12 잔여 2) |
+| 16e | `헬퍼는 .tmp 밖의 파일을 정리 대상으로 삼지 않는다` | 같은 파일 | `createTestDb()` 후 `filePath` 확인 → `prisma/dev.db`·`-wal`·`-shm`의 존재 여부와 sha256을 기록 → `cleanup()` / `cleanupAllTestDbs()` → 다시 기록 | `filePath`가 `<root>/.tmp/`로 시작하고 `<root>/prisma/dev.db`가 아니다. 개발 DB 3파일의 **존재 여부와 해시가 전후 동일**하다(세 파일이 모두 없는 환경에서도 성립한다). 13-11을 반증 가능하게 만든다 |
 | 17 | `지문은 내용이 바뀌면 달라진다` | 같은 파일 | 임시 디렉터리에 가짜 `migration.sql` 2종 | 두 지문이 다르다 |
 | 18 | `지문은 파일 나열 순서에 무관하다` | 같은 파일 | 같은 내용, 생성 순서만 다른 임시 디렉터리 2개 | 두 지문이 같다 |
 | 19 | `템플릿 지문이 다르면 템플릿을 다시 만든다` | 같은 파일 | `.tmp/test-template.meta.json`에 잘못된 지문을 쓴 뒤 `createTestDb()` | meta의 지문이 `computeMigrationsFingerprint(prisma/migrations)` 값으로 갱신됨 |
 
 17·18·19번은 **실제 `prisma/migrations` 파일을 건드리지 않는다.** 지문 함수에 임시 디렉터리를 넘기고, 19번은 meta 파일만 조작한다. 마이그레이션 파일 수정 금지(CLAUDE.md)를 지키면서 지문 로직을 검증하는 방법이다.
 
-**16b·16c가 `forceTemplateRebuild`를 쓰는 이유 (DR-12).** 앞선 테스트가 이미 유효한 템플릿을 만들어 두면 생성 경로가 통째로 생략되어 `beforeTemplateFinalizeHook`이 호출되지 않는다. 그러면 이 두 테스트는 **조용히 아무것도 검증하지 않는 상태**가 된다. `forceTemplateRebuild: true`가 생성 경로 진입을 결정적으로 만든다. 두 테스트는 최종 템플릿을 남기지 않으므로(실패로 끝난다) 뒤따르는 테스트의 템플릿 캐시를 깨지 않는다 — 그것도 16b가 함께 단정하는 내용이다.
+**16b·16c·16d가 `forceTemplateRebuild`를 쓰는 이유 (DR-12).** 앞선 테스트가 이미 유효한 템플릿을 만들어 두면 생성 경로가 통째로 생략되어 두 finalize hook이 호출되지 않는다. 그러면 이 테스트들은 **조용히 아무것도 검증하지 않는 상태**가 된다. `forceTemplateRebuild: true`가 생성 경로 진입을 결정적으로 만든다.
+
+- **16b·16c**는 템플릿 DB rename **전에** 실패하므로 최종 템플릿을 남기지 않는다 — 뒤따르는 테스트의 캐시를 깨지 않으며, 그것도 16b가 함께 단정하는 내용이다.
+- **16d는 다르다.** 최종 템플릿 DB가 이미 교체된 뒤에 실패하므로 **최종 meta가 삭제된 상태**로 끝난다 (13-A의 3'-b). 그래서 16d의 두 번째 단계가 `createTestDb()`를 한 번 더 불러 **템플릿과 meta를 정상 상태로 복구**하고, 그 복구가 실제로 일어났음을 단정한다. 이 테스트를 마지막에 두거나 복구 호출을 생략하면 뒤따르는 테스트가 매번 템플릿을 다시 만들게 된다 — 느려질 뿐 결과는 옳지만, 복구 단정 자체가 3'-b의 검증이므로 생략하지 않는다.
 
 ### 규칙 위반 케이스
 
@@ -578,11 +626,13 @@ describe("테스트 DB 헬퍼", () => {
 | 21 | 스키마 변경이 감지되는가 | `schema.prisma`의 `startUnit Int?`를 `startUnit Int`로 임시 변경하고 `npm run db:validate && npm run db:diff` | `db:diff`가 종료 코드 2(drift). **마이그레이션을 새로 만들지 않고 즉시 되돌린다** |
 | 22 | 기본값이 갈라지면 잡히는가 | `package.json`의 `db:wal` 기본값을 `file:./other.db`로 임시 변경 | 케이스 4가 실패. **확인 후 되돌린다** |
 | 23 | 스크립트 집합 변화가 잡히는가 | `db:wal`에서 `DATABASE_URL=${DATABASE_URL:-file:./dev.db} ` 접두를 임시 제거 | 케이스 3이 실패. **확인 후 되돌린다** |
-| 24 | 복사 이후 생성 실패 시 정리되는가 | `createTestDb({ afterCopyHook: () => { throw new Error("boom"); } })` | throw 되고 `.tmp/`에 해당 `.db`/`-wal`/`-shm`이 남지 않는다 (케이스 `생성 중 실패하면 부분 생성 파일을 남기지 않는다`) |
-| 24b | 템플릿 생성 실패 시 정리되는가 | `createTestDb({ forceTemplateRebuild: true, beforeTemplateFinalizeHook: () => { throw new Error("template boom"); } })` | throw 되고 임시 템플릿 4종이 남지 않는다 (케이스 16b·16c). **13-A의 정리 목록에서 `-wal` 한 줄을 임시로 지우면 16b가 실패해야 한다 — 확인 후 되돌린다** |
+| 24 | 복사 이후 생성 실패 시 정리되는가 | `createTestDb({ afterCopyHook: () => { throw new Error("boom"); } })` | throw 되고 `.tmp/`에 해당 `.db`/`-wal`/`-shm`/`-journal`이 남지 않는다 (케이스 `생성 중 실패하면 부분 생성 파일을 남기지 않는다`) |
+| 24b | 템플릿 생성 실패 시 정리되는가 | `createTestDb({ forceTemplateRebuild: true, beforeTemplateFinalizeHook: () => { throw new Error("template boom"); } })` | throw 되고 임시 템플릿 5종(`.db`·`-wal`·`-shm`·`-journal`·`.meta.json`)이 남지 않는다 (케이스 16b·16c). **12-A의 `DB_FILE_SUFFIXES`에서 `"-journal"`을 임시로 지우면 구현이 그 파일을 정리 대상에서 놓치게 되고, 16b의 `-journal` 0건 단정이 반증 가능해진다 — 실행해 확인한 뒤 되돌린다** |
+| 24c | DB 교체 이후 실패 계약이 살아 있는가 | 13-A의 3'-b(최종 meta 삭제) 규칙을 구현에서 임시 제거하고 케이스 16d를 실행 | 16d가 **실패한다.** meta가 남아 다음 호출이 낡은 meta로 캐시를 재사용한다. **확인 후 되돌린다** (DR-12 잔여 2) |
+| 24d | cleanup의 sidecar 삭제가 살아 있는가 | `cleanup()`의 unlink 목록에서 `-wal`(또는 `-shm`)을 임시 제외 | 케이스 **16-a가 실패한다.** 16은 환경에 따라 통과할 수 있으므로(`$disconnect()`가 sidecar를 지웠을 수 있다) **16-a가 결정적 판정이다.** 확인 후 되돌린다 (DR-12 잔여 3) |
 | 25 | enum 지원 확인 | `npm run db:validate` | 통과. 실패하면 **중단 후 보고** (D13 전제 붕괴) |
 
-20~23·20b·24b번은 검증이 실제로 작동하는지 확인하는 절차다. **여섯 명령의 실제 출력을 완료 보고에 포함하고, 코드는 원상 복구된 상태여야 한다.** 21·20b번은 특히 마이그레이션을 재생성하지 않도록 주의한다.
+20~23·20b·24b·24c·24d번은 검증이 실제로 작동하는지 확인하는 절차다. **여덟 명령의 실제 출력을 완료 보고에 포함하고, 코드는 원상 복구된 상태여야 한다.** 21·20b번은 특히 마이그레이션을 재생성하지 않도록 주의한다.
 
 ### 경계 케이스
 
@@ -592,7 +642,8 @@ describe("테스트 DB 헬퍼", () => {
 | 27 | WAL 재적용 | `npm run db:wal`을 연속 2회 | 두 번 모두 `journal_mode=wal`, 종료 코드 0 (멱등) |
 | 28 | `.env` 없는 환경 | `env -u DATABASE_URL npm run db:validate` | 종료 코드 0 (D19) |
 | 29 | DB 파일 위치 | 요구사항 16의 세 명령 | `prisma/dev.db`만 존재. 루트 `dev.db`와 `prisma/prisma/`는 없음 |
-| 30 | cleanup 멱등성 | `cleanup()`을 두 번 호출 | 두 번째도 오류 없이 종료 |
+| 30 | cleanup 멱등성 | `cleanup()`을 두 번 호출 | 두 번째도 오류 없이 종료. **조기 반환이 아니라 unlink 재시도로 끝난다** (13-10, 정상 케이스 16-a) |
+| 31 | 템플릿만 남는 상태 | `npm test` 종료 후 `.tmp/` 내용 확인 | `test-template.db`와 `test-template.meta.json` **두 항목만** 남는다. 개별 테스트 DB·sidecar·임시 템플릿은 0건 (13-9, 13-A) |
 
 ## 완료 조건
 
@@ -610,15 +661,20 @@ env -u DATABASE_URL npm run db:wal                  → 2회째도 종료 코드
 npm run typecheck                                   → 에러 0
 npm run lint                                        → 에러 0
 npm test -- --reporter=verbose                      → 실패 0건. 정상 케이스 1~19
-                                                      (16b·16c 포함)의 테스트명이
-                                                      모두 출력에 나타난다
+                                                      (16·16-a·16b·16c·16d·16e 포함)의
+                                                      테스트명이 모두 출력에 나타난다
+ls -A .tmp/                                         → test-template.db와
+                                                      test-template.meta.json 두 항목만
+                                                      (경계 케이스 31 — 잔여 파일 0건)
 npm run build                                       → 성공
 npm run e2e                                         → 실패 0건
 ```
 
+**테스트 종료 후 `.tmp/`에 남아도 되는 것은 템플릿 2개뿐이다** (DR-12). 개별 테스트 DB(`.db`/`-wal`/`-shm`/`-journal`), 임시 템플릿(`test-template.<pid>-*`)이 하나라도 남아 있으면 **완료 조건 미충족**이다. `ls -A`를 쓰는 이유는 점으로 시작하는 파일도 세기 위함이다.
+
 **누적 테스트 개수를 완료 조건으로 쓰지 않는다.** 이 스펙에 명명된 테스트 이름이 `--reporter=verbose` 출력에 모두 나타나는 것으로 판정한다.
 
-완료 보고에 `prisma --version`, `db:validate`, `db:diff`, `db:wal`, `npm test`, 그리고 위반 케이스 20~23·20b·24b의 **실제 출력**을 포함한다. 위반 케이스 실행이 끝난 뒤 `ls -la .tmp/`의 출력도 함께 내어 **임시 템플릿 잔여물이 없음**을 보인다 (DR-12).
+완료 보고에 `prisma --version`, `db:validate`, `db:diff`, `db:wal`, `npm test`, 그리고 위반 케이스 20~23·20b·24b·24c·24d의 **실제 출력**을 포함한다. 위반 케이스 실행이 끝난 뒤 `ls -A .tmp/`의 출력도 함께 내어 **임시 템플릿 잔여물이 없음**을 보인다 (DR-12).
 
 ## 금지 사항
 
@@ -627,7 +683,10 @@ npm run e2e                                         → 실패 0건
 - 로컬·CI 어디서도 `npx prisma generate|validate|migrate|migrate deploy`를 직접 부르지 않는다. npm 스크립트를 쓴다 (DR-06). **`tests/helpers/db.ts`의 자식 프로세스도 예외가 아니다 — `npm run db:deploy`를 쓴다** (13-A, DR-12).
 - 실패 정리를 첫 오류에서 중단하도록 구현하지 않는다. `$disconnect()`나 개별 `unlink`가 실패해도 나머지를 계속 정리한다 (13-B).
 - 정리 오류로 원래 오류를 감싸거나 교체하지 않는다 (13-B의 4).
-- `afterCopyHook`·`beforeTemplateFinalizeHook`·`forceTemplateRebuild`는 **`tests/helpers/db.ts`에만 존재한다.** `src/` 아래 어떤 파일에도 두지 않고, Route Handler·서비스 계층·운영 API의 요청 경로에 노출하지 않는다.
+- `afterCopyHook`·`beforeTemplateFinalizeHook`·`beforeMetaFinalizeHook`·`forceTemplateRebuild`는 **`tests/helpers/db.ts`에만 존재한다.** `src/` 아래 어떤 파일에도 두지 않고, Route Handler·서비스 계층·운영 API의 요청 경로에 노출하지 않는다.
+- **정리 대상 경로를 `<root>/.tmp/` 밖으로 넓히지 않는다** (13-11). 특히 `prisma/dev.db`와 그 sidecar를 지우는 코드를 헬퍼에 두지 않는다.
+- **`cleanup()`을 "이미 정리했다" 플래그로 조기 반환하게 만들지 않는다** (13-10). 그렇게 하면 정상 케이스 16-a가 sidecar 삭제 책임을 증명하지 못한다.
+- 정리 대상 파일 목록을 여러 곳에 손으로 나열하지 않는다. `DB_FILE_SUFFIXES` 하나를 쓴다 (12-A).
 - `EXPECTED_DB_URL_SCRIPTS`를 "N개 이상" 같은 하한 비교로 바꾸지 않는다.
 - `prisma/seed.ts`를 만들지 않는다 (T04).
 - `src/domain/` 아래에 파일을 만들지 않는다 (T05). 특히 enum 재수출 파일을 미리 만들지 않는다.
@@ -647,9 +706,11 @@ npm run e2e                                         → 실패 0건
 | 4 | `datasourceUrl` vs `datasources` | `datasourceUrl`(문자열 1개). Prisma 6에서 권장되는 형태이고 중첩 객체보다 단순하다 |
 | 5 | 구조 검증을 T03에 두는 이유 | T04로 미루면 T03이 눈검사로 완료된다. 파일 수 초과를 감수하고 자기 검증을 택했다 (DR-07) |
 | 6 | 테스트 DB 헬퍼를 T03에 두는 이유 | 구조 검증이 마이그레이션된 임시 DB를 필요로 하므로 같은 태스크에 있어야 한다. T04는 이 헬퍼를 **사용만** 한다 |
-| 7 | 테스트 seam 3종 (`afterCopyHook`, `beforeTemplateFinalizeHook`, `forceTemplateRebuild`) | 실패 경로 정리를 결정적으로 검증할 다른 방법이 없다 (DR-12). 세 옵션 모두 **`tests/helpers/db.ts` 안에만 존재하며** `src/` 아래에 두지 않는다. 프로덕션 코드는 이 헬퍼를 import 하지 않으므로 제품 요청 경로·운영 API에 노출되지 않는다. T04의 `beforeCreateHook`도 같은 원칙을 따른다 |
+| 7 | 테스트 seam 4종 (`afterCopyHook`, `beforeTemplateFinalizeHook`, `beforeMetaFinalizeHook`, `forceTemplateRebuild`) | 실패 경로 정리를 결정적으로 검증할 다른 방법이 없다 (DR-12). 네 옵션 모두 **`tests/helpers/db.ts` 안에만 존재하며** `src/` 아래에 두지 않는다. 프로덕션 코드는 이 헬퍼를 import 하지 않으므로 제품 요청 경로·운영 API에 노출되지 않는다. T04의 시드 hook들도 같은 원칙을 따른다 |
 | 7b | 템플릿 생성 자식 명령 | **`execFileSync("npm", ["run", "db:deploy"], { cwd: <저장소 루트>, env: { ...process.env, DATABASE_URL }, stdio: "pipe" })`로 고정** (13-A). `npx prisma migrate deploy` 직접 호출을 쓰지 않는 이유는 D19의 기본값 주입 경로를 헬퍼·로컬·CI가 공유해야 하기 때문이다 |
 | 7c | 정리 실패 시의 오류 정책 | **원래 작업 오류 우선.** 정리 오류는 `console.warn`으로 남기고, 원래 작업이 성공했을 때만 `AggregateError`로 throw 한다 (13-B의 4) |
+| 7d | 정리 대상 파일의 집합 | **`["", "-wal", "-shm", "-journal"]` 네 접미사** (12-A). 템플릿은 WAL을 쓰지 않아 rollback journal이 생길 수 있고, 복사본도 WAL 적용 전 구간이 있다. 목록은 상수 하나가 정의처다 |
+| 7e | 템플릿 DB 교체 이후 실패의 계약 | **"이전 상태 복원"이 아니라 "다음 호출에서의 강제 재생성"** (13-A의 3'-b). 최종 meta를 지워 13-3의 재생성 경로를 반드시 타게 한다. 최종 템플릿 DB는 다른 워커가 열고 있을 수 있으므로 지우지 않는다 |
 | 8 | 기본값 DDL 문자열 검증 범위 | `orderIndex`와 `status`만. 그 외는 "기본값 존재" 수준 (요구사항 21) |
 | 9 | enum의 DB 레벨 강제 | **없다** (DR-07). DB와 migration은 값 범위를 강제하지 않고, 컬럼은 `TEXT`이며 `CHECK` 제약이 없다. 강제는 Prisma ORM/Client 계층에서만 일어나고, 우회 쓰기로 들어간 invalid 값은 조회 시 런타임 오류가 될 수 있다. 외부 입력 검증은 **T07의 Zod**가 담당한다. 전체 표는 요구사항 3에 있으며 `architecture.md` §1.5, `decisions.md` D13과 같은 내용이어야 한다 |
 | 10 | `db:diff`의 shadow DB | `file:./.tmp-shadow.db` (schema 기준 → `prisma/.tmp-shadow.db`). `.gitignore`에 추가한다 |

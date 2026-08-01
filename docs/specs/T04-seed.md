@@ -81,6 +81,16 @@ export interface SeedOptions {
    * 롤백을 결정적으로 검증하기 위한 테스트 전용 seam이며 프로덕션 경로는 넘기지 않는다.
    */
   beforeCreateHook?: () => Promise<void> | void;
+  /**
+   * 트랜잭션 안에서 ScheduleBlock 생성 단계 직후·Assignment 생성 단계 직전에 호출된다.
+   * "일부만 생성된 뒤 실패"를 검증하기 위한 테스트 전용 seam (R2-04).
+   */
+  afterBlocksHook?: () => Promise<void> | void;
+  /**
+   * 트랜잭션 안에서 Assignment 생성 단계 직후·커밋 직전에 호출된다.
+   * "마지막 생성 단계까지 끝난 뒤 실패"를 검증하기 위한 테스트 전용 seam (R2-04).
+   */
+  afterAssignmentsHook?: () => Promise<void> | void;
 }
 
 export async function seed(client: PrismaClient, options?: SeedOptions): Promise<SeedResult>;
@@ -94,9 +104,46 @@ $transaction(async (tx) => {
   2. force면  tx.assignment.deleteMany()  →  tx.scheduleBlock.deleteMany()
   3. beforeCreateHook?.()                 (있으면 호출)
   4. tx.scheduleBlock.count() === 0 이면 블록 10건 생성, 아니면 skipped.blocks = true
-  5. tx.assignment.count() === 0  이면 과제 27건 생성, 아니면 skipped.assignments = true
+  5. afterBlocksHook?.()                  (있으면 호출 — R2-04)
+  6. tx.assignment.count() === 0  이면 과제 27건 생성, 아니면 skipped.assignments = true
+  7. afterAssignmentsHook?.()             (있으면 호출 — R2-04)
 }, { maxWait: 10_000, timeout: 30_000 })
 ```
+
+**1~7단계는 전부 같은 `tx` 위에서 실행된다.** 어느 단계도 `tx`가 아닌 클라이언트(`client`, 전역 `prisma`)를 쓰지 않는다 — 트랜잭션 밖에서 쓰면 롤백되지 않는다.
+
+**2-A. 생성 도중 실패의 롤백 계약 (R2-04).** 위 순서에서 **4단계(블록 생성)와 6단계(과제 생성)는 서로 다른 실패 지점**이다. `beforeCreateHook`(3단계)만으로는 "삭제가 롤백되는가"만 증명되고, **"블록을 만든 뒤 과제 생성에서 실패하면 그 블록도 사라지는가"는 증명되지 않는다.** 그래서 seam이 셋이다.
+
+| seam | 어디서 실패하는가 | 반증하는 잘못된 구현 | 검증 테스트 |
+|---|---|---|---|
+| `beforeCreateHook` | 삭제 직후, 생성 전 | `deleteMany`가 트랜잭션 밖에 있음 | 위반 케이스 18 |
+| `afterBlocksHook` | **블록 10건이 이미 만들어진 뒤** | **ScheduleBlock 생성이 트랜잭션 밖에 있음** | 위반 케이스 18b·18c |
+| `afterAssignmentsHook` | **과제 27건까지 만들어진 뒤** | **Assignment 생성이 트랜잭션 밖에 있음** | 위반 케이스 18d |
+
+- **hook은 실제 구현 경로 안에 있어야 한다.** 위 순서의 지정된 위치에서 `await`로 호출하며, 테스트를 위해 별도의 "테스트용 시드 함수"를 만들어 우회하지 않는다. 우회하면 실제 트랜잭션 경계를 검증하지 못한다.
+- **롤백 판정은 fixture와 비교하지 않는다.** 시드 표(`tests/fixtures/seed-expected.ts`)와 비교하면 시드와 fixture가 같은 잘못된 값을 공유할 때 거짓 양성이 된다. 판정 기준은 **`seed()` 호출 직전에 테스트가 직접 찍은 스냅샷**이며, 호출 후 상태가 그 스냅샷과 deep equal이어야 한다 (요구사항 2-B).
+- 이 테스트들은 전부 `createTestDb()`가 만든 임시 DB에서 돈다. **개발 DB(`prisma/dev.db`)를 대상으로 실행하지 않는다** (T03 13-11, 금지 사항).
+
+**2-B. 롤백 스냅샷의 정의 (R2-04).** 롤백 테스트는 아래 함수를 테스트 파일 안에 두고 `seed()` 호출 전후로 각각 부른다.
+
+```ts
+/** 롤백 판정용 스냅샷. ID·timestamp처럼 비결정적인 값은 제외한다. */
+async function snapshot(client: PrismaClient) {
+  const books = await client.book.findMany({
+    select: { title: true, language: true, progressUnit: true, totalUnits: true, archivedAt: true },
+  });
+  const blocks = await client.scheduleBlock.findMany({
+    select: { date: true, startMinute: true, endMinute: true, label: true, kind: true, matchType: true },
+  });
+  const assignments = await client.assignment.findMany({
+    select: { date: true, orderIndex: true, type: true, title: true, startUnit: true, endUnit: true, status: true },
+  });
+  // 정렬은 요구사항 15와 같은 규칙(코드 유닛 비교)을 쓴다.
+  return { books: sortBooks(books), blocks: sortBlocks(blocks), assignments: sortAssignments(assignments) };
+}
+```
+
+**단정 형태는 언제나 `expect(after).toEqual(before)`다.** "건수가 1이다" 같은 부분 단정만 두지 않는다 — 건수만 보면 값이 바뀐 롤백 실패를 놓친다.
 
 3. **`update: {}`가 Book 정책의 핵심이다** (DR-10). 이미 있는 책의 `language`·`progressUnit`·`totalUnits`·`archivedAt`을 시드값으로 **덮어쓰지 않는다.** 부모가 관리 화면(§6.2-5)에서 단위를 고치거나 책을 보관해 둔 상태에서 시드를 다시 돌려도 그 편집이 살아 있어야 한다.
 
@@ -115,6 +162,8 @@ $transaction(async (tx) => {
 `force`는 환경변수 `SEED_FORCE === "1"`로도 켤 수 있다. `main()`이 이 값을 읽어 `seed(client, { force })`에 넘긴다.
 
 6. `main()`은 `createPrismaClient()`로 클라이언트를 만들고, 결과를 한 줄로 출력한 뒤 `$disconnect()` 한다. 예외가 나면 `process.exitCode = 1`.
+
+   **`main()`이 `seed()`에 넘기는 옵션은 정확히 `{ force }` 하나다.** 세 테스트 seam(`beforeCreateHook`·`afterBlocksHook`·`afterAssignmentsHook`) 중 어느 것도 여기서 만들지 않으며, 환경변수나 CLI 인자로 켤 수 있게 하지 않는다 (요구사항 2-A, 금지 사항).
 
 ```
 seeded books=9 blocks=10 assignments=27 (skipped: blocks=false assignments=false)
@@ -319,6 +368,8 @@ it("db:setup이 db:deploy → db:wal → db:seed 순서로 조합된다", ...);
 | 판독 불가 항목을 추측해 채우지 않는다 (부록 C.2-1) | `2026-07-29에는 과제가 2건이고 한글책 과제가 없다` / `판독 불가 항목을 임의로 채우지 않는다` |
 | 기본 시드는 기존 데이터를 덮어쓰거나 지우지 않는다 (DR-10) | `기존 과제가 있으면 다시 만들지 않는다` / `기본 시드는 기존 Book의 사용자 필드를 보존한다` / `기본 시드는 기존 블록과 과제를 보존한다` |
 | force 중 실패하면 전부 롤백된다 (DR-10) | `force 중 실패하면 삭제가 롤백된다` |
+| **생성 단계 도중 실패해도 전부 롤백된다 — 블록 생성 후, 과제 생성 후 모두** (R2-04) | `블록 생성 도중 실패하면 새 DB에 아무 행도 남지 않는다` / `블록 생성 후 실패하면 force가 지운 사용자 데이터가 복원된다` / `과제 생성 후 실패하면 블록과 과제가 모두 롤백된다` |
+| **롤백 판정은 fixture가 아니라 호출 전 스냅샷과 비교한다** (R2-04, 요구사항 2-B) | 위 세 테스트가 `expect(after).toEqual(before)`가 아니면 요구사항 2-B 미충족 |
 | force는 Book을 지우지 않는다 (DR-10) | `force는 Book을 삭제하지 않는다` |
 | `김방구 3`의 `3`을 챕터로 파싱하지 않는다 | `김방구 3의 제목이 그대로 저장되고 진도가 파싱되지 않는다` |
 | `db:setup`은 `db:deploy → db:wal → db:seed` 순서로 조합된다 (RR-03) | `db:setup이 db:deploy → db:wal → db:seed 순서로 조합된다` |
@@ -359,7 +410,7 @@ it("db:setup이 db:deploy → db:wal → db:seed 순서로 조합된다", ...);
 
 ### 규칙 위반 케이스 — 데이터 보존과 롤백 (DR-10)
 
-아래 테스트들은 **사용자 데이터 fixture를 먼저 만든 뒤** 시드를 돌린다. fixture는 시드 표에 없는 값이어야 한다.
+아래 테스트들은 **사용자 데이터 fixture를 먼저 만든 뒤** 시드를 돌린다. fixture는 시드 표에 없는 값이어야 한다. **예외는 케이스 18b 하나로, 그것은 fixture 없이 빈 DB에서 돈다** — 새 DB에서의 생성 도중 실패를 보기 위함이다 (R2-04, 요구사항 2-A).
 
 사용자 fixture 정의: `Big Note`를 `progressUnit=PAGE`, `totalUnits=99`, `archivedAt=2026-07-30T00:00:00Z`로 생성 / `date="2026-08-20", startMinute=1200, endMinute=1260, label="사용자 블록", kind=FREE`인 블록 1건 — **시드 블록의 날짜(`2026-07-29`)와 다른 날짜를 쓴다.** 같은 날짜를 쓰면 보존 검증이 겹침 규칙과 얽힌다 / `date="2026-08-20", orderIndex=0, type=DIARY, title="사용자 과제"`인 과제 1건.
 
@@ -368,7 +419,10 @@ it("db:setup이 db:deploy → db:wal → db:seed 순서로 조합된다", ...);
 | 15 | `기존 과제가 있으면 다시 만들지 않는다` | fixture 생성 후 `seed(prisma)` | 과제 1건 유지, `result.assignments === 0`, `result.skipped.assignments === true` |
 | 16 | `기본 시드는 기존 Book의 사용자 필드를 보존한다` | 같은 조건 | `Big Note`의 `progressUnit === "PAGE"`, `totalUnits === 99`, `archivedAt`이 그대로. **`updatedAt`은 검사하지 않는다** (요구사항 3) |
 | 17 | `기본 시드는 기존 블록과 과제를 보존한다` | 같은 조건 | `사용자 블록`과 `사용자 과제`가 그대로 존재하고 블록·과제 총 건수가 각각 1 |
-| 18 | `force 중 실패하면 삭제가 롤백된다` | fixture 생성 후 `seed(prisma, { force: true, beforeCreateHook: () => { throw new Error("boom"); } })` | 호출이 reject되고, `사용자 블록`·`사용자 과제`가 **그대로 남아 있다**. 블록·과제 건수가 각각 1 |
+| 18 | `force 중 실패하면 삭제가 롤백된다` | fixture 생성 후 스냅샷 → `seed(prisma, { force: true, beforeCreateHook: () => { throw new Error("boom"); } })` | 호출이 reject되고, 호출 후 스냅샷이 **호출 전 스냅샷과 deep equal**이다 (`사용자 블록`·`사용자 과제`가 그대로, 블록·과제 각각 1건) |
+| 18b | `블록 생성 도중 실패하면 새 DB에 아무 행도 남지 않는다` | **빈 DB**(fixture 없음)에서 스냅샷(= 세 배열 모두 빈 상태) → `seed(prisma, { afterBlocksHook: () => { throw new Error("blocks boom"); } })` | 호출이 reject되고 호출 후 스냅샷이 **호출 전 스냅샷과 deep equal**이다 — 즉 `Book` 0건, `ScheduleBlock` **0건**, `Assignment` 0건. **블록 10건이 이미 만들어진 뒤 실패했는데도 하나도 남지 않는다** — 블록 생성이 트랜잭션 밖이면 10건이 남아 실패한다 (R2-04) |
+| 18c | `블록 생성 후 실패하면 force가 지운 사용자 데이터가 복원된다` | fixture 생성 후 스냅샷 → `seed(prisma, { force: true, afterBlocksHook: () => { throw new Error("blocks boom"); } })` | 호출이 reject되고 호출 후 스냅샷이 **호출 전 스냅샷과 deep equal**이다. 즉 삭제된 `사용자 블록`·`사용자 과제`가 돌아오고, 시드 블록은 **0건**이며, `Big Note`의 사용자 필드(`PAGE`/`99`/`archivedAt`)도 그대로다 |
+| 18d | `과제 생성 후 실패하면 블록과 과제가 모두 롤백된다` | fixture 생성 후 스냅샷 → `seed(prisma, { force: true, afterAssignmentsHook: () => { throw new Error("assignments boom"); } })` | 호출이 reject되고 호출 후 스냅샷이 **호출 전 스냅샷과 deep equal**이다. 블록 총 1건(`사용자 블록`)·과제 총 1건(`사용자 과제`)이며 시드 27건은 **0건**이다 — 과제 생성이 트랜잭션 밖이면 27건이 남아 실패한다 (R2-04) |
 | 19 | `force는 Book을 삭제하지 않는다` | fixture 생성 후 `seed(prisma, { force: true })` | `Big Note`가 존재하고 `totalUnits === 99` 유지. 책 총 9권 |
 | 20 | `판독 불가 항목을 임의로 채우지 않는다` | 시드 후 전체 과제·책 조회 | `title`과 책 제목 어디에도 `김치`가 포함된 건이 0건 |
 
@@ -393,8 +447,12 @@ DR-09가 요구한 절차다. **`prisma/seed.ts`를 임시로 고쳐** exact mat
 | 28 | 블록 표의 셀 변경이 잡히는가 | `뿌리깊은 국어`의 `label`을 `뿌리깊은국어`로 (공백 제거) | `ScheduleBlock 10건이 기대 fixture와 정확히 일치한다`가 실패 |
 | 28b | 블록 날짜 변경이 잡히는가 (UR-16) | 블록 1건의 `date`를 `2026-07-30`으로 | `ScheduleBlock 10건이 기대 fixture와 정확히 일치한다`와 `모든 블록이 같은 날짜에 속한다`가 **둘 다** 실패 |
 | 29 | 과제 표의 셀 변경이 잡히는가 | `2026-08-09`의 `endUnit`을 `217` → `218`로 | `Assignment 27건이 기대 fixture와 정확히 일치한다`가 실패 |
+| 29b | **블록 생성이 트랜잭션 안에 있는가** (R2-04) | 요구사항 2의 4단계(블록 10건 생성)를 `tx` 대신 **트랜잭션 밖 클라이언트**로 수행하도록 임시 변경 | `블록 생성 도중 실패하면 새 DB에 아무 행도 남지 않는다`와 `블록 생성 후 실패하면 force가 지운 사용자 데이터가 복원된다`가 **둘 다** 실패한다. **확인 후 되돌린다** |
+| 29c | **과제 생성이 트랜잭션 안에 있는가** (R2-04) | 요구사항 2의 6단계(과제 27건 생성)를 `tx` 대신 트랜잭션 밖 클라이언트로 수행하도록 임시 변경 | `과제 생성 후 실패하면 블록과 과제가 모두 롤백된다`가 실패한다. **확인 후 되돌린다** |
 
-**네 명령(27·28·28b·29)의 실제 출력을 완료 보고에 포함하고, 코드는 원상 복구된 상태여야 한다.**
+**여섯 명령(27·28·28b·29·29b·29c)의 실제 출력을 완료 보고에 포함하고, 코드는 원상 복구된 상태여야 한다.**
+
+**29b·29c가 R2-04의 핵심이다.** 두 mutation이 없으면 "전체 시드가 하나의 트랜잭션"이라는 요구는 문서상의 주장일 뿐이고, 생성 단계를 트랜잭션 밖으로 뺀 구현도 exact match 테스트와 기존 rollback 테스트를 전부 통과한다. 원복 후 `git diff prisma/seed.ts`가 비어 있어야 한다.
 
 ### 정상 케이스 — 스크립트 구성 (`src/server/prisma.test.ts`, RR-03)
 
@@ -423,13 +481,22 @@ DR-09가 요구한 절차다. **`prisma/seed.ts`를 임시로 고쳐** exact mat
 npm run typecheck                → 에러 0
 npm run lint                     → 에러 0
 npm test -- --reporter=verbose   → 실패 0건. 정상 케이스 1~14(10b 포함)·30,
-                                   위반 15~20, 경계 21~26의 테스트명이
-                                   모두 출력에 나타난다
+                                   위반 15~20(**18b·18c·18d 포함**),
+                                   경계 21~26의 테스트명이 모두 출력에 나타난다
 npm run build                    → 성공
 npm run e2e                      → 실패 0건
 ```
 
 **누적 테스트 개수를 완료 조건으로 쓰지 않는다.** 명명된 테스트 이름이 `--reporter=verbose` 출력에 나타나는 것으로 판정한다.
+
+**아래 네 롤백 테스트의 이름이 출력에 없으면 완료 조건 미충족이다** (R2-04). 이름을 바꾸거나 합치지 않는다.
+
+```
+force 중 실패하면 삭제가 롤백된다
+블록 생성 도중 실패하면 새 DB에 아무 행도 남지 않는다
+블록 생성 후 실패하면 force가 지운 사용자 데이터가 복원된다
+과제 생성 후 실패하면 블록과 과제가 모두 롤백된다
+```
 
 ### 2. `db:setup` 실행 검증 — 격리된 임시 DB에서만 (DR-11, RR-03)
 
@@ -585,8 +652,10 @@ trap 설치부터 종료까지의 순서는 **모호함 없이 아래 하나뿐�
 - `prisma/seed.ts`가 `tests/fixtures/seed-expected.ts`를 import 하지 않는다. 그 반대도 금지 (DR-09).
 - `update: {}` 대신 시드값을 넣어 기존 Book을 덮어쓰지 않는다 (DR-10).
 - `force`에서 `Book`을 `deleteMany` 하지 않는다.
-- 삭제·생성을 트랜잭션 밖에서 수행하지 않는다.
-- `beforeCreateHook`을 `main()`이나 프로덕션 경로에서 넘기지 않는다.
+- **삭제·생성을 트랜잭션 밖에서 수행하지 않는다.** Book upsert·삭제·블록 생성·과제 생성이 **전부** 같은 `tx` 위에서 일어난다 (요구사항 2). 위반 케이스 29b·29c는 검증용 임시 변경이며 반드시 원복한다.
+- **`beforeCreateHook`·`afterBlocksHook`·`afterAssignmentsHook`을 `main()`이나 프로덕션 경로에서 넘기지 않는다.** `main()`이 만드는 옵션 객체는 정확히 `{ force }`이며 hook 키를 포함하지 않는다. 세 hook은 `seed()`의 **선택적 인자로만** 존재하고, 환경변수·CLI 인자·HTTP 요청 등 어떤 외부 입력으로도 켤 수 없다 (T03 스펙 미정 7과 같은 원칙).
+- 테스트를 위해 시드 로직을 복제한 **별도의 "테스트용 시드 함수"를 만들지 않는다.** 롤백 테스트는 실제 `seed()`를 그대로 호출해야 한다 (요구사항 2-A).
+- **롤백 테스트의 판정을 `tests/fixtures/seed-expected.ts`와의 비교로 바꾸지 않는다.** 호출 전 스냅샷과 비교한다 (요구사항 2-B).
 - `package.json`에 `"prisma": { "seed": ... }` 설정을 추가하지 않는다. `prisma db seed` 경로는 D19의 기본값 주입을 거치지 않아 `.env` 없는 환경에서 실패한다. 시드 실행은 `npm run db:seed`만 쓴다.
 - `김치찌…`를 포함해 판독 불가 항목을 어떤 이름으로도 시드하지 않는다.
 - `startUnit`에 값을 넣지 않는다. 계산해서 채우는 것도 금지다 (D5가 기각한 A안).
@@ -608,7 +677,8 @@ trap 설치부터 종료까지의 순서는 **모호함 없이 아래 하나뿐�
 | 3 | Book upsert의 update 분기 | **`update: {}`.** 기존 사용자 편집을 보존한다. `@updatedAt` 갱신은 허용하고 검증 대상에서 제외한다 (DR-10) |
 | 4 | `force`가 Book에 미치는 영향 | **없다.** 삭제 대상은 `Assignment`·`ScheduleBlock`뿐이다 |
 | 5 | 트랜잭션 경계 | 책 upsert부터 과제 생성까지 **전부 하나의 `$transaction`** (요구사항 2). `timeout: 30_000` |
-| 6 | `beforeCreateHook` 테스트 seam | 롤백을 결정적으로 검증할 다른 방법이 없다. T03의 `afterCopyHook`과 같은 패턴이며 프로덕션 경로는 넘기지 않는다 |
+| 6 | 테스트 seam 3종 (`beforeCreateHook`, `afterBlocksHook`, `afterAssignmentsHook`) | 롤백을 결정적으로 검증할 다른 방법이 없다. 세 위치가 각각 **삭제 단계 / 블록 생성 이후 / 과제 생성 이후**의 실패를 만든다 (요구사항 2-A, R2-04). T03의 `afterCopyHook` 계열과 같은 패턴이며 `main()`·프로덕션 경로에는 넘기지 않는다 |
+| 6b | 롤백 판정 기준 | **호출 전 스냅샷과의 deep equal** (요구사항 2-B). fixture와 비교하면 시드와 fixture가 같은 잘못된 값을 공유할 때 거짓 양성이 된다. 건수만 보는 부분 단정도 쓰지 않는다 |
 | 7 | fixture 중복 전사 | **의도된 중복이다** (DR-09). 두 파일이 서로를 참조하면 비교가 무의미해진다. 표가 바뀌면 두 곳을 함께 고치고, 그 사실을 PR 본문에 적는다 |
 | 8 | 문자열 정렬 방식 | 코드 유닛 비교. `localeCompare` 금지 (요구사항 16) |
 | 9 | `bookId` 비교 방법 | cuid는 비결정적이므로 `bookTitle`로 변환해 비교한다 (요구사항 14) |
