@@ -1,8 +1,8 @@
 # Workflow Status
 
 - current_branch: docs/specs-batch1
-- stage: spec-rereview-complete
-- doc_status: changes-required
+- stage: spec-revision
+- doc_status: ready-for-rereview
 - active_tasks: T01, T02, T03, T04
 - spec_writer: claude
 - spec_reviewer: codex
@@ -13,8 +13,8 @@
 - original_review_file: docs/reviews/DR-T01-T04-spec-review.md
 - original_review_commit: b4511c7
 - rereview_base_commit: c77ab5c33122da5fd3414e1ed054fe22224506fc
-- revision_round: 3
-- revision_baseline_commit: 8b8c0512af62cb00902ca50901159590a5b4ebb9
+- revision_round: 4
+- revision_baseline_commit: 9acc7b2
 - overall_verdict: BLOCK
 - T01_verdict: PASS
 - T02_verdict: PASS
@@ -24,18 +24,20 @@
 - requirements_file: docs/requirements.md
 - requirements_source: user statements of 2026-08-01 (requirements + AP-01..AP-12 decisions + OPEN-01 decision + OPEN-02 decision) + both mockups
 - unapproved_design_assumptions: 0
-- open_implementation_details: 1
-- open_implementation_detail_ids: R3-01 — `{ date, to }` bulk-status의 NOT_FOUND·빈 날짜·validation/HTTP·결정적 rollback test 계약
-- next_action: Claude fixes Round 3 residual/new findings; then Codex independently performs Round 4 rereview
-- next_owner: claude
+- open_implementation_details: 0
+- open_implementation_detail_ids: —
+- next_action: Codex Round 4 independent rereview
+- next_owner: codex
 
 ## Verdict ownership
 
-**Only Codex changes finding verdicts.** Claude is the spec author and does not mark its own work `RESOLVED` or `PASS`. 아래 revision 3의 `addressed_by_claude` / `pending_codex_verification` 이력은 그대로 보존한다. **현재 `overall_verdict`와 태스크별 판정은 Codex Round 3의 결과다.**
+**Only Codex changes finding verdicts.** Claude is the spec author and does not mark its own work `RESOLVED`, `PASS`, or `CLOSED`. 아래 revision 3·4의 `addressed_by_claude` / `pending_codex_verification` 이력은 그대로 보존한다. **현재 `overall_verdict`와 태스크별 판정은 Codex Round 3의 결과이며 Claude가 바꾸지 않았다** — T01 PASS · T02 PASS · T03 BLOCK · T04 BLOCK · overall BLOCK.
 
-Round 2와 Claude revision 3의 집계는 과거 이력이다. 현재 잔여 심각도는 아래 **Round 3 — Codex verdict** 절이 정의한다.
+Round 2·3의 Codex 판정과 심각도 집계는 **역사적 기록이며 이번 revision에서 변경하지 않았다.** Claude revision 3의 집계도 과거 이력이다. 현재 잔여 심각도는 아래 **Round 3 — Codex verdict** 절이 정의한다.
 
-`doc_status`는 Round 3에서 구현 차단 P2가 남아 `changes-required`다. `OPEN-02`의 두 사용자 정책 값은 결정됐지만 날짜 기반 API로 옮기는 계약은 R3-01 때문에 미결 1건이다. `implementation_allowed`는 계속 `false`다.
+`doc_status`는 `ready-for-rereview`로 바뀌었다. 이는 **Claude의 수정이 끝나 재검토를 받을 준비가 됐다는 뜻일 뿐, Finding이 해결됐다는 판정이 아니다.** `overall_verdict`는 `BLOCK`, `implementation_allowed`는 `false`로 유지된다 — 두 값은 Codex Round 4에서만 바뀔 수 있다.
+
+`open_implementation_details`가 `0`인 것은 **R3-01이 지적한 미결 선택(빈 날짜 · validation · HTTP 분류 · 결정적 rollback test)을 문서가 이제 지정한다**는 사실 기록이다. R3-01의 판정 자체는 여전히 `pending_codex_verification`이다.
 
 ## Finding Status
 
@@ -140,6 +142,39 @@ Round 3 태스크 판정은 **T01 PASS / T02 PASS / T03 BLOCK / T04 BLOCK / over
 | R2-04 | addressed_by_claude / pending_codex_verification | T04에 `afterBlocksHook`·`afterAssignmentsHook` 두 seam을 트랜잭션 **안**에 추가(요구사항 2의 5·7단계). 요구사항 2-A에 seam별 반증 대상 표, 2-B에 **호출 전 스냅샷과의 deep equal** 판정 계약(fixture 비교 금지)을 신설. 신규 테스트 18b(빈 DB)·18c(사용자 데이터 + force)·18d(과제 생성 이후), 신규 mutation 29b·29c(생성 단계를 트랜잭션 밖으로 옮기면 실패), 완료 조건에 롤백 테스트 4개 이름 명시. `main()`은 `{ force }`만 넘긴다는 규칙과 금지 사항 추가 |
 | R2-05 | addressed_by_claude / pending_codex_verification | architecture 부록 C.3의 기준일을 **`2026-08-01`로 고정**하고 "오늘" 표현을 제거. 지난 날짜 7/29·7/30·7/31과 날짜별 시드 과제 수(2+2+2=6)를 표로 계산해 **밀린 6건**의 근거를 명시. 밀림 정의(§3.4)와 파생 `OVERDUE`(D7·UR-18)를 함께 참조하고, 기준일이 7/31이면 4건이 된다는 대응 관계도 남김 |
 
+### Revision 4 — Claude 수정 (baseline `9acc7b2`, 미커밋)
+
+**모든 항목의 상태는 `addressed_by_claude` / `pending_codex_verification`이다. RESOLVED · PASS · CLOSED 판정은 Codex Round 4 독립 재검토에서만 나온다.** Round 3의 Codex 판정과 심각도 집계는 위 절에 그대로 남아 있다.
+
+| Finding | Round 3 Codex verdict (불변) | 상태 | 무엇을 고쳤는가 |
+|---|---|---|---|
+| DR-12 | PARTIALLY RESOLVED (P2, T03) | addressed_by_claude / pending_codex_verification | T03에 정상 케이스 **16-a2 `cleanup이 -journal sentinel 파일을 직접 지운다`** 신설. 요구사항 **16-A**가 절차를 고정한다 — `createTestDb()` → `cleanup()`으로 **열린 연결을 없앤 뒤** 테스트가 `<db>`·`-wal`·`-shm`·`-journal` 네 파일을 직접 만들고 `-journal`에 고유 `JOURNAL_SENTINEL`을 쓴다. 전제 확인 후 `cleanup()` 재호출, 네 경로 부재 단정. 기대 경로는 구현의 `dbFilePaths()`가 아니라 **테스트 파일의 `EXPECTED_DB_ARTIFACTS` 리터럴**이라 mutation과 함께 줄어들지 않는다. 정상/mutation 경로 기대 결과를 표로 기록하고, mutation이 바꾸는 정확한 코드 조각(`DB_FILE_SUFFIXES`의 `"-journal"` 한 항목)과 실패해야 할 고유 테스트명을 명시. 신규 mutation **24b-2** 추가. 16b의 `-journal` 단정은 **보조 단정**으로 강등했다(정상 종료한 migration 뒤라 SQLite가 journal을 이미 지웠을 수 있다). 16e에 **`prisma/dev.db-journal`** 을 불변 스냅샷 대상으로 추가. sentinel은 `<root>/.tmp/` 안에서만 만들고 `afterEach`에서 정리한다 |
+| RR-01 | PARTIALLY RESOLVED (P3) | addressed_by_claude / pending_codex_verification | 잔여는 R3-02와 동일한 결함이므로 아래 R3-02 행의 수정으로 함께 처리했다 |
+| R2-02 | PARTIALLY RESOLVED (P2) | addressed_by_claude / pending_codex_verification | 잔여였던 R3-01(요청·실패 모델 모순)을 아래 R3-01 행대로 정리. 사용자 승인 정책 값(`UR-25.4` 원자적 전부 롤백 · `UR-25.5` 동일 상태 멱등 no-op)은 **변경하지 않았다.** T01~T04 범위를 늘리지 않았고 새 태스크 번호를 만들지 않았다 (T09 · T17 유지) |
+| R2-04 | PARTIALLY RESOLVED (P2, T04) | addressed_by_claude / pending_codex_verification | T04 요구사항 **2-B를 전체 DB 스냅샷으로 교체** — `SELECT *`로 Book · ScheduleBlock · Assignment의 **전체 행 · 전체 컬럼**(`id`·`createdAt`·`updatedAt`·`completedAt`·`bookId` 포함)을 `ORDER BY "id"`로 안정 정렬해 캡처하고, `sqlite_sequence`가 존재하면 함께 캡처한다(`_prisma_migrations`는 제외). `normalizeRow`는 null · timestamp · BigInt · Buffer의 **표현만** 정규화하고 값을 버리지 않는다. 실패 후 스냅샷은 **새 `PrismaClient`(독립 연결)** 로 읽는다. 판정은 오직 `expect(after).toEqual(before)`이며 잠금 · 파일 존재 · 예외 발생만으로 통과시키지 않는다. mutation을 **SQLite writer lock에 의존하지 않는 형태로 교체** — 29b(Book upsert) · 29c(블록) · 29d(과제)는 해당 단계를 `$transaction` **시작 전**으로 끌어올려 단일 연결로 커밋시키고, 29e는 트랜잭션 래퍼 자체를 제거한다. 두 번째 writer 연결 · `SQLITE_BUSY` · 존재하지 않는 ID를 쓰지 않는다는 금지를 명시. seam 3종의 타입 · 기본값(`undefined`) · 호출 위치 · 주입 주체와 **운영 경로 비노출**(`main()`은 `{ force }`만 전달)을 표로 고정 |
+| R3-01 | NEW (P2) | addressed_by_claude / pending_codex_verification | architecture §5.2의 `bulk-status` 계약을 요청 모델과 무모순하게 재작성. 요청은 `{ date, to }`만이고 대상은 **트랜잭션 시작 시점의 그 날짜 과제 전체**. 실패를 **요청 수준 / 항목 수준**으로 분류 — 검증 실패 **400**(`BULK_STATUS_INVALID_REQUEST`, `applied:false`, write 0건, 항목 ID 생성 없음), 금지된 전이 **409**(실재 대상의 id · 현재 상태 · 요청 상태 · 사유, 전부 롤백), 내부 실패 **500**(`BULK_STATUS_INTERNAL_ERROR`, 예외 세부정보 비노출, 가짜 항목 ID 없음), **빈 날짜는 200 성공 빈 batch**(`changed:0` · `unchanged:0` · `items:[]`). 항목별 **`NOT_FOUND` 제거**(요청에 ID가 없어 발생 불가)와 **권한 오류 제거**(MVP에 인증 없음 — 후속 401/403 · write 0건은 고려사항으로만 기록). 부록 C.3의 최소 테스트를 **9건**으로 확장(빈 날짜 · 400 · 409 · 500 · seam 기반 결정적 rollback)하고 2번(응답 계약)과 9번(쓰기 원자성)의 역할을 분리해 중복·충돌을 정리. rollback 테스트는 **첫 update 이후** test-only seam이 던지고 전후 전체 스냅샷 deep equal로 판정하며 **writer lock · 존재하지 않는 ID · 처리 순서 결합을 쓰지 않는다.** 같은 사상을 `decisions.md` D22와 `requirements.md` §7.1에 기록. **정책 값 · T01~T04 범위 · 태스크 번호는 그대로다** |
+| R3-02 | NEW (P3) | addressed_by_claude / pending_codex_verification | `requirements.md` 원문 출처에 **`OPEN-02` 사용자 결정** 추가 — 이제 2026-08-01 사용자 요구사항 · AP-01~AP-12 결정 · OPEN-01 결정 · OPEN-02 결정 · mockup 2건 전부가 들어간다. 상단 상태 문장에도 `OPEN-02`를 반영하고, 출처 유형(mockup 관찰 / 사용자 요구 / 사용자 결정 / 설계 결정)을 섞지 않는다는 규칙을 명시. §8.1-b의 stale **`31개` → `33개`** 정정과 함께 **생성 경위**를 §8.1-b · §8.3 · 이 STATUS에서 같은 표현으로 통일 — "AP 결정 + OPEN-01로 31건, OPEN-02로 `UR-25.4`·`UR-25.5` 2건이 추가되어 총 33건". **MR-30 역추적 추가** — §8.1-b의 부록 C 시드 · T04 행을 `MR-01~MR-30`으로 넓히고 반영 위치를 T04 정상 케이스 7(모든 과제 `status = PLANNED`)로 명시, §8.2 D7 행에 MR-30 추가, §8.3의 "mockup 관찰 미반영 0건" 행에 근거를 기재 |
+
+**재계산한 ID 집계 (실제 ID 집합에서 다시 셌다).** base UR **26** · 조건 **33** · OR **3** · MR **23** · NR **9** · OPEN **0**. 조건 33건의 내역은 UR-14 1 · UR-15 4 · UR-16 4 · UR-19 1 · UR-20 2 · UR-22 3 · UR-23 1 · UR-24 6 · UR-25 5 · UR-26 6이며, 본문 ID 집합과 §8.1-b 추적표 ID 집합이 정확히 일치하고 중복은 없다. 정방향(requirements → architecture/decisions/specs) 누락 0건, 역방향(architecture/decisions/specs → requirements) 누락 0건. **이 수치는 Claude의 재계산 결과이며 판정이 아니다.**
+
+**Round 4 재검토 전 수동 정합성 수정 — T04 개발 DB 보호 범위 (Finding 아님).**
+
+Round 4 사전 검증에서 **T03과 T04의 개발 DB 보호 대상 집합이 어긋나 있는 것**이 발견되어 T04만 T03에 맞췄다. T03 정상 케이스 16e는 `prisma/dev.db`·`-wal`·`-shm`·`-journal` **4파일**을 불변 검사 대상으로 삼는데, T04 완료 검증 스크립트의 `DEV_DB_FILES`에는 앞의 3개만 있었고 임시 검증 DB cleanup에도 `-journal`이 빠져 있었다. 같은 개발 DB를 두 태스크가 다른 범위로 보호하면 한쪽이 놓치는 파일이 생긴다.
+
+| 위치 | 수정 |
+|---|---|
+| T04 2-1 보호 대상 표 | `prisma/dev.db-journal` 행 추가. "세 파일" → **"네 파일"**. T03 16e와 같은 집합임을 명시 |
+| T04 2-2 스크립트 `DEV_DB_FILES` | `("prisma/dev.db" "prisma/dev.db-wal" "prisma/dev.db-shm" "prisma/dev.db-journal")` |
+| T04 2-2 `finish()` cleanup | 임시 검증 DB 정리 대상에 `"$VERIFY_DB-journal"` 추가 |
+| T04 2-3 실행 순서·기대 표 | BEFORE 스냅샷 "3파일" → **"4파일"**, cleanup 대상에 `-journal` 추가, 기대 표를 "개발 DB 4파일" 전후 동일로 통일 |
+| T04 요구사항 추적·금지 사항·스펙 미정 18 | 개발 DB 불변 검사 범위를 4파일로 통일하고 T03 16e와 같은 집합임을 명시 |
+
+**개발 DB 파일을 실제로 만들거나 지우거나 고치지 않는다.** `prisma/dev.db-journal`이 존재하면 sha256을 기록해 전후를 비교하고, 존재하지 않으면 `absent` 상태가 전후 동일한지만 확인한다.
+
+이 수정은 **문서 간 정합성 보정이며 새 Finding도 판정 변경도 아니다.** Codex Round 3 판정과 심각도 집계, `overall_verdict: BLOCK`, T01 PASS / T02 PASS / T03 BLOCK / T04 BLOCK, `implementation_allowed: false`, 모든 Finding의 `addressed_by_claude` / `pending_codex_verification` 상태, `next_owner: codex`는 **전부 그대로다.**
+
+**이번 revision이 수정한 파일:** `docs/requirements.md`, `docs/architecture.md`, `docs/decisions.md`, `docs/specs/T03-prisma-schema.md`, `docs/specs/T04-seed.md`, `docs/workflow/STATUS.md`. **`docs/specs/T01-scaffold.md`와 `docs/specs/T02-test-harness.md`는 T01 · T02가 PASS이므로 변경하지 않았다.** `docs/reviews/**`, 운영 코드, 테스트, 패키지, CI, Prisma, DB 파일도 변경하지 않았다.
+
 ### Round 2 제출 당시 Claude revisions — historical pending state
 
 | Finding | Codex round 1 verdict | Claude round 2 state | What changed |
@@ -191,7 +226,7 @@ All twelve are resolved. **No unapproved design assumption remains.**
 | — | OPEN-01 decided | UR-26, UR-26.1 … UR-26.6 |
 | — | **OPEN-02 decided** | **UR-25.4, UR-25.5** (설계 결정 **D22**) |
 
-**조건 총계는 33건이다** (base UR 26건). AP 결정으로 31건이었고, `OPEN-02` 결정으로 `UR-25.4`·`UR-25.5` 2건이 추가됐다. 전체 목록과 반영 위치는 `docs/requirements.md` §8.1-b에 있다 — 이전의 "22건" 표기는 실제 ID 집합과 달라 정정했다 (R2-02).
+**조건 총계는 33건이다** (base UR 26건). AP 결정 + `OPEN-01`로 31건이었고, `OPEN-02` 결정으로 `UR-25.4`·`UR-25.5` 2건이 추가됐다. 전체 목록과 반영 위치는 `docs/requirements.md` §8.1-b에 있다 — 이전의 "22건" 표기는 실제 ID 집합과 달라 정정했다 (R2-02).
 
 ### AP-03 rejection — data model change
 
@@ -212,4 +247,6 @@ All twelve are resolved. **No unapproved design assumption remains.**
 
 `implementation_allowed` is `false`. No implementation, package install, DB operation, branch change, commit, push, PR, merge, or deployment is authorized by this status.
 
-Codex Round 3 재검토는 완료됐다. **다음 담당자는 Claude**이며 DR-12, RR-01, R2-02, R2-04, R3-01, R3-02를 문서에서 수정한 뒤 Codex에 Round 4 독립 재검토를 요청한다. Claude revision 3의 자기 보고와 Codex Round 2 기록은 과거 이력으로 보존했다.
+Claude revision 4가 끝났다. **다음 담당자는 Codex**이며, 다음 작업은 `9acc7b2` 이후 문서 변경에 대한 **Round 4 독립 재검토**다. DR-12 · RR-01 · R2-02 · R2-04 · R3-01 · R3-02는 전부 `addressed_by_claude` / `pending_codex_verification`이며, **작성자인 Claude는 어떤 Finding도 RESOLVED · PASS · CLOSED로 판정하지 않았다.** Claude revision 3의 자기 보고와 Codex Round 2 · 3 기록은 과거 이력으로 보존했다.
+
+이번 세션에서 구현은 시작하지 않았고 커밋 · 푸시 · PR · merge · 패키지 설치 · migration · seed · DB 실행도 하지 않았다.

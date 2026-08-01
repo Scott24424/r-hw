@@ -116,7 +116,7 @@ $transaction(async (tx) => {
 
 | seam | 어디서 실패하는가 | 반증하는 잘못된 구현 | 검증 테스트 |
 |---|---|---|---|
-| `beforeCreateHook` | 삭제 직후, 생성 전 | `deleteMany`가 트랜잭션 밖에 있음 | 위반 케이스 18 |
+| `beforeCreateHook` | 삭제 직후, 생성 전 | `deleteMany`가 트랜잭션 밖에 있음, **또는 Book upsert(1단계)가 트랜잭션 밖에 있음** | 위반 케이스 18 · 18c (Book 경계는 mutation 29b) |
 | `afterBlocksHook` | **블록 10건이 이미 만들어진 뒤** | **ScheduleBlock 생성이 트랜잭션 밖에 있음** | 위반 케이스 18b·18c |
 | `afterAssignmentsHook` | **과제 27건까지 만들어진 뒤** | **Assignment 생성이 트랜잭션 밖에 있음** | 위반 케이스 18d |
 
@@ -124,26 +124,71 @@ $transaction(async (tx) => {
 - **롤백 판정은 fixture와 비교하지 않는다.** 시드 표(`tests/fixtures/seed-expected.ts`)와 비교하면 시드와 fixture가 같은 잘못된 값을 공유할 때 거짓 양성이 된다. 판정 기준은 **`seed()` 호출 직전에 테스트가 직접 찍은 스냅샷**이며, 호출 후 상태가 그 스냅샷과 deep equal이어야 한다 (요구사항 2-B).
 - 이 테스트들은 전부 `createTestDb()`가 만든 임시 DB에서 돈다. **개발 DB(`prisma/dev.db`)를 대상으로 실행하지 않는다** (T03 13-11, 금지 사항).
 
-**2-B. 롤백 스냅샷의 정의 (R2-04).** 롤백 테스트는 아래 함수를 테스트 파일 안에 두고 `seed()` 호출 전후로 각각 부른다.
+**2-B. 롤백 스냅샷의 정의 — 전체 DB 상태 (R2-04 Round 3 잔여 1).**
+
+Round 3이 지적한 문제는 **부분 스냅샷**이었다. `id`·`createdAt`·`updatedAt`·`completedAt`·`bookId`를 제외하면, 예컨대 **Book upsert를 트랜잭션 밖으로 옮긴 잘못된 구현**이 기존 Book의 `updatedAt`만 커밋하고도 롤백 테스트를 통과한다. 그래서 스냅샷은 **선택 필드가 아니라 사용자 테이블의 전체 행·전체 컬럼**을 결정적으로 캡처한다.
+
+**캡처 대상은 아래로 고정한다. 구현자가 고르지 않는다.**
+
+| 대상 | 캡처 방식 | 이유 |
+|---|---|---|
+| `Book` 전체 행 | `SELECT * FROM "Book" ORDER BY "id"` | 사용자 테이블 |
+| `ScheduleBlock` 전체 행 | `SELECT * FROM "ScheduleBlock" ORDER BY "id"` | 사용자 테이블 |
+| `Assignment` 전체 행 | `SELECT * FROM "Assignment" ORDER BY "id"` | 사용자 테이블 |
+| `sqlite_sequence` | `SELECT name, seq FROM sqlite_sequence ORDER BY name` — **테이블이 없으면 빈 배열**로 둔다 | 이후 ID 생성에 영향을 주는 DB 상태. 현재 스키마는 `AUTOINCREMENT`를 쓰지 않아 이 테이블이 없을 수 있으나, 생겼는데도 비교하지 않는 상태를 만들지 않는다 |
+| `_prisma_migrations` | **캡처하지 않는다** | 시드가 건드리지 않는 Prisma 내부 테이블이며, 마이그레이션 시각이 들어가 결정성을 해친다 |
 
 ```ts
-/** 롤백 판정용 스냅샷. ID·timestamp처럼 비결정적인 값은 제외한다. */
-async function snapshot(client: PrismaClient) {
-  const books = await client.book.findMany({
-    select: { title: true, language: true, progressUnit: true, totalUnits: true, archivedAt: true },
-  });
-  const blocks = await client.scheduleBlock.findMany({
-    select: { date: true, startMinute: true, endMinute: true, label: true, kind: true, matchType: true },
-  });
-  const assignments = await client.assignment.findMany({
-    select: { date: true, orderIndex: true, type: true, title: true, startUnit: true, endUnit: true, status: true },
-  });
-  // 정렬은 요구사항 15와 같은 규칙(코드 유닛 비교)을 쓴다.
-  return { books: sortBooks(books), blocks: sortBlocks(blocks), assignments: sortAssignments(assignments) };
+/**
+ * 롤백 판정용 전체 DB 스냅샷.
+ * 컬럼을 고르지 않는다 — SELECT * 로 모든 컬럼을 그대로 가져온다.
+ * id · createdAt · updatedAt · completedAt · bookId를 포함하며, 그것이 이 스냅샷의 요점이다.
+ */
+async function snapshotDb(client: PrismaClient) {
+  const rows = async (sql: string) =>
+    (await client.$queryRawUnsafe<Record<string, unknown>[]>(sql)).map(normalizeRow);
+
+  const hasSeq = (
+    await client.$queryRawUnsafe<{ n: bigint }[]>(
+      `SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'`,
+    )
+  )[0].n > 0n;
+
+  return {
+    books:       await rows(`SELECT * FROM "Book" ORDER BY "id"`),
+    blocks:      await rows(`SELECT * FROM "ScheduleBlock" ORDER BY "id"`),
+    assignments: await rows(`SELECT * FROM "Assignment" ORDER BY "id"`),
+    sqliteSequence: hasSeq ? await rows(`SELECT name, seq FROM sqlite_sequence ORDER BY name`) : [],
+  };
 }
 ```
 
-**단정 형태는 언제나 `expect(after).toEqual(before)`다.** "건수가 1이다" 같은 부분 단정만 두지 않는다 — 건수만 보면 값이 바뀐 롤백 실패를 놓친다.
+**`normalizeRow`의 계약.** 비교를 결정적으로 만들기 위한 **표현 정규화만** 한다. 값을 버리지 않는다.
+
+| 규칙 | 내용 |
+|---|---|
+| 컬럼 | 행에 존재하는 **모든 키**를 유지한다. 화이트리스트·블랙리스트를 두지 않는다 |
+| 정렬 | 행은 SQL의 `ORDER BY "id"`(코드 유닛 비교)로, 각 행의 키는 이름 오름차순으로 정렬해 직렬화한다 |
+| `null` | `null`을 그대로 남긴다. `undefined`나 빈 문자열로 바꾸지 않는다 — nullable 값의 차이가 반드시 드러나야 한다 |
+| timestamp | `Date`는 `toISOString()`, 정수 epoch는 그대로 둔다. **값을 버리거나 반올림하지 않는다** — `updatedAt` 한 컬럼의 차이가 29b mutation의 유일한 검출 신호다 |
+| `BigInt` | `Number`가 아니라 문자열로 직렬화해 정밀도 손실을 막는다 |
+| `Buffer` | `toString("hex")` |
+
+**독립 연결에서 다시 읽는다 (R2-04 Round 3 잔여, 요구 9·10).** 실패 후 스냅샷은 `seed()`에 넘긴 클라이언트가 아니라 **같은 파일을 가리키는 새 `PrismaClient`**로 읽고, 읽은 뒤 `$disconnect()` 한다.
+
+```ts
+async function snapshotFresh(filePath: string) {
+  const fresh = new PrismaClient({ datasources: { db: { url: `file:${filePath}` } } });
+  try { return await snapshotDb(fresh); } finally { await fresh.$disconnect(); }
+}
+```
+
+- **잠금이나 파일 존재 여부로 롤백을 판정하지 않는다.** 판정은 오직 두 스냅샷의 deep equality다. "파일이 있다", "연결이 살아 있다", "예외가 났다"만으로 통과시키지 않는다.
+- **fixture를 공유하지 않는다.** 기대값은 `tests/fixtures/seed-expected.ts`도, `seed()`를 다시 부른 결과도 아니다. **`seed()` 호출 직전에 테스트가 직접 찍은 스냅샷**이 유일한 기대값이다. 시드 구현과 기대값이 같은 잘못된 값을 공유할 수 없는 형태다.
+- **단정 형태는 언제나 `expect(after).toEqual(before)`다.** "건수가 1이다" 같은 부분 단정만 두지 않는다 — 건수만 보면 값이 바뀐 롤백 실패를 놓친다.
+- 롤백 테스트는 **빈 DB**(18b), **기존 사용자 데이터 DB**(18), **`force` 경로**(18c·18d)를 모두 포함한다. 실패 seam은 블록 생성 후(18b·18c)와 과제 생성 후(18d)로 유지된다.
+
+**정상 구현에서 이 스냅샷이 실패하지 않는 이유.** 전체 롤백이 일어나면 `id`·`createdAt`·`updatedAt`을 포함한 모든 컬럼이 트랜잭션 시작 시점 값으로 돌아간다. 전체 컬럼 비교가 통과하지 못하는 경우는 **실제로 커밋된 변경이 남았을 때뿐이다.**
 
 3. **`update: {}`가 Book 정책의 핵심이다** (DR-10). 이미 있는 책의 `language`·`progressUnit`·`totalUnits`·`archivedAt`을 시드값으로 **덮어쓰지 않는다.** 부모가 관리 화면(§6.2-5)에서 단위를 고치거나 책을 보관해 둔 상태에서 시드를 다시 돌려도 그 편집이 살아 있어야 한다.
 
@@ -369,11 +414,11 @@ it("db:setup이 db:deploy → db:wal → db:seed 순서로 조합된다", ...);
 | 기본 시드는 기존 데이터를 덮어쓰거나 지우지 않는다 (DR-10) | `기존 과제가 있으면 다시 만들지 않는다` / `기본 시드는 기존 Book의 사용자 필드를 보존한다` / `기본 시드는 기존 블록과 과제를 보존한다` |
 | force 중 실패하면 전부 롤백된다 (DR-10) | `force 중 실패하면 삭제가 롤백된다` |
 | **생성 단계 도중 실패해도 전부 롤백된다 — 블록 생성 후, 과제 생성 후 모두** (R2-04) | `블록 생성 도중 실패하면 새 DB에 아무 행도 남지 않는다` / `블록 생성 후 실패하면 force가 지운 사용자 데이터가 복원된다` / `과제 생성 후 실패하면 블록과 과제가 모두 롤백된다` |
-| **롤백 판정은 fixture가 아니라 호출 전 스냅샷과 비교한다** (R2-04, 요구사항 2-B) | 위 세 테스트가 `expect(after).toEqual(before)`가 아니면 요구사항 2-B 미충족 |
+| **롤백 판정은 fixture가 아니라 호출 전 전체 DB 스냅샷과 비교한다** (R2-04, 요구사항 2-B) | 위 네 테스트(18·18b·18c·18d)가 `expect(after).toEqual(before)`가 아니거나 `snapshotDb`가 전체 컬럼을 담지 않으면 요구사항 2-B 미충족 |
 | force는 Book을 지우지 않는다 (DR-10) | `force는 Book을 삭제하지 않는다` |
 | `김방구 3`의 `3`을 챕터로 파싱하지 않는다 | `김방구 3의 제목이 그대로 저장되고 진도가 파싱되지 않는다` |
 | `db:setup`은 `db:deploy → db:wal → db:seed` 순서로 조합된다 (RR-03) | `db:setup이 db:deploy → db:wal → db:seed 순서로 조합된다` |
-| 개발 DB(`prisma/dev.db`와 `-wal`·`-shm`)는 완료 검증으로 변하지 않는다 (DR-11) | 완료 조건 2의 불변 검사가 종료 코드 `2`로 실패 |
+| 개발 DB(`prisma/dev.db`와 `-wal`·`-shm`·`-journal`)는 완료 검증으로 변하지 않는다 (DR-11, T03 16e와 같은 4파일) | 완료 조건 2의 불변 검사가 종료 코드 `2`로 실패 |
 
 ## 테스트 케이스
 
@@ -419,10 +464,10 @@ it("db:setup이 db:deploy → db:wal → db:seed 순서로 조합된다", ...);
 | 15 | `기존 과제가 있으면 다시 만들지 않는다` | fixture 생성 후 `seed(prisma)` | 과제 1건 유지, `result.assignments === 0`, `result.skipped.assignments === true` |
 | 16 | `기본 시드는 기존 Book의 사용자 필드를 보존한다` | 같은 조건 | `Big Note`의 `progressUnit === "PAGE"`, `totalUnits === 99`, `archivedAt`이 그대로. **`updatedAt`은 검사하지 않는다** (요구사항 3) |
 | 17 | `기본 시드는 기존 블록과 과제를 보존한다` | 같은 조건 | `사용자 블록`과 `사용자 과제`가 그대로 존재하고 블록·과제 총 건수가 각각 1 |
-| 18 | `force 중 실패하면 삭제가 롤백된다` | fixture 생성 후 스냅샷 → `seed(prisma, { force: true, beforeCreateHook: () => { throw new Error("boom"); } })` | 호출이 reject되고, 호출 후 스냅샷이 **호출 전 스냅샷과 deep equal**이다 (`사용자 블록`·`사용자 과제`가 그대로, 블록·과제 각각 1건) |
-| 18b | `블록 생성 도중 실패하면 새 DB에 아무 행도 남지 않는다` | **빈 DB**(fixture 없음)에서 스냅샷(= 세 배열 모두 빈 상태) → `seed(prisma, { afterBlocksHook: () => { throw new Error("blocks boom"); } })` | 호출이 reject되고 호출 후 스냅샷이 **호출 전 스냅샷과 deep equal**이다 — 즉 `Book` 0건, `ScheduleBlock` **0건**, `Assignment` 0건. **블록 10건이 이미 만들어진 뒤 실패했는데도 하나도 남지 않는다** — 블록 생성이 트랜잭션 밖이면 10건이 남아 실패한다 (R2-04) |
-| 18c | `블록 생성 후 실패하면 force가 지운 사용자 데이터가 복원된다` | fixture 생성 후 스냅샷 → `seed(prisma, { force: true, afterBlocksHook: () => { throw new Error("blocks boom"); } })` | 호출이 reject되고 호출 후 스냅샷이 **호출 전 스냅샷과 deep equal**이다. 즉 삭제된 `사용자 블록`·`사용자 과제`가 돌아오고, 시드 블록은 **0건**이며, `Big Note`의 사용자 필드(`PAGE`/`99`/`archivedAt`)도 그대로다 |
-| 18d | `과제 생성 후 실패하면 블록과 과제가 모두 롤백된다` | fixture 생성 후 스냅샷 → `seed(prisma, { force: true, afterAssignmentsHook: () => { throw new Error("assignments boom"); } })` | 호출이 reject되고 호출 후 스냅샷이 **호출 전 스냅샷과 deep equal**이다. 블록 총 1건(`사용자 블록`)·과제 총 1건(`사용자 과제`)이며 시드 27건은 **0건**이다 — 과제 생성이 트랜잭션 밖이면 27건이 남아 실패한다 (R2-04) |
+| 18 | `force 중 실패하면 삭제가 롤백된다` | fixture 생성 후 `snapshotFresh(filePath)` → `seed(prisma, { force: true, beforeCreateHook: () => { throw new Error("boom"); } })` | 호출이 reject되고, 호출 후 `snapshotFresh(filePath)`가 **호출 전 스냅샷과 deep equal**이다 (`사용자 블록`·`사용자 과제`가 그대로, 블록·과제 각각 1건) |
+| 18b | `블록 생성 도중 실패하면 새 DB에 아무 행도 남지 않는다` | **빈 DB**(fixture 없음)에서 `snapshotFresh(filePath)`(= 네 배열 모두 빈 상태) → `seed(prisma, { afterBlocksHook: () => { throw new Error("blocks boom"); } })` | 호출이 reject되고 호출 후 `snapshotFresh(filePath)`가 **호출 전 스냅샷과 deep equal**이다 — 즉 `Book` 0건, `ScheduleBlock` **0건**, `Assignment` 0건. **블록 10건이 이미 만들어진 뒤 실패했는데도 하나도 남지 않는다** — 블록 생성이 트랜잭션 밖이면 10건이 남아 실패한다 (R2-04) |
+| 18c | `블록 생성 후 실패하면 force가 지운 사용자 데이터가 복원된다` | fixture 생성 후 `snapshotFresh(filePath)` → `seed(prisma, { force: true, afterBlocksHook: () => { throw new Error("blocks boom"); } })` | 호출이 reject되고 호출 후 `snapshotFresh(filePath)`가 **호출 전 스냅샷과 deep equal**이다. 즉 삭제된 `사용자 블록`·`사용자 과제`가 돌아오고, 시드 블록은 **0건**이며, `Big Note`의 사용자 필드(`PAGE`/`99`/`archivedAt`)도 그대로다 |
+| 18d | `과제 생성 후 실패하면 블록과 과제가 모두 롤백된다` | fixture 생성 후 `snapshotFresh(filePath)` → `seed(prisma, { force: true, afterAssignmentsHook: () => { throw new Error("assignments boom"); } })` | 호출이 reject되고 호출 후 `snapshotFresh(filePath)`가 **호출 전 스냅샷과 deep equal**이다. 블록 총 1건(`사용자 블록`)·과제 총 1건(`사용자 과제`)이며 시드 27건은 **0건**이다 — 과제 생성이 트랜잭션 밖이면 27건이 남아 실패한다 (R2-04) |
 | 19 | `force는 Book을 삭제하지 않는다` | fixture 생성 후 `seed(prisma, { force: true })` | `Big Note`가 존재하고 `totalUnits === 99` 유지. 책 총 9권 |
 | 20 | `판독 불가 항목을 임의로 채우지 않는다` | 시드 후 전체 과제·책 조회 | `title`과 책 제목 어디에도 `김치`가 포함된 건이 0건 |
 
@@ -447,12 +492,37 @@ DR-09가 요구한 절차다. **`prisma/seed.ts`를 임시로 고쳐** exact mat
 | 28 | 블록 표의 셀 변경이 잡히는가 | `뿌리깊은 국어`의 `label`을 `뿌리깊은국어`로 (공백 제거) | `ScheduleBlock 10건이 기대 fixture와 정확히 일치한다`가 실패 |
 | 28b | 블록 날짜 변경이 잡히는가 (UR-16) | 블록 1건의 `date`를 `2026-07-30`으로 | `ScheduleBlock 10건이 기대 fixture와 정확히 일치한다`와 `모든 블록이 같은 날짜에 속한다`가 **둘 다** 실패 |
 | 29 | 과제 표의 셀 변경이 잡히는가 | `2026-08-09`의 `endUnit`을 `217` → `218`로 | `Assignment 27건이 기대 fixture와 정확히 일치한다`가 실패 |
-| 29b | **블록 생성이 트랜잭션 안에 있는가** (R2-04) | 요구사항 2의 4단계(블록 10건 생성)를 `tx` 대신 **트랜잭션 밖 클라이언트**로 수행하도록 임시 변경 | `블록 생성 도중 실패하면 새 DB에 아무 행도 남지 않는다`와 `블록 생성 후 실패하면 force가 지운 사용자 데이터가 복원된다`가 **둘 다** 실패한다. **확인 후 되돌린다** |
-| 29c | **과제 생성이 트랜잭션 안에 있는가** (R2-04) | 요구사항 2의 6단계(과제 27건 생성)를 `tx` 대신 트랜잭션 밖 클라이언트로 수행하도록 임시 변경 | `과제 생성 후 실패하면 블록과 과제가 모두 롤백된다`가 실패한다. **확인 후 되돌린다** |
+| 29b | **Book upsert가 트랜잭션 안에 있는가** (R2-04 Round 3) | 요구사항 2의 **1단계(Book 9권 upsert)** 를 `$transaction(...)` **호출 이전**으로 끌어올려 `client`로 수행하고, 트랜잭션 안에서는 1단계를 건너뛰도록 임시 변경 | `force 중 실패하면 삭제가 롤백된다`(18)와 `블록 생성 후 실패하면 force가 지운 사용자 데이터가 복원된다`(18c)가 **실패한다.** 트랜잭션 밖에서 커밋된 Book 9권의 신규 행과 기존 `Big Note`의 `updatedAt` 변화가 전체 컬럼 스냅샷에서 드러난다 (요구사항 2-B). **확인 후 되돌린다** |
+| 29c | **블록 생성이 트랜잭션 안에 있는가** (R2-04) | 요구사항 2의 **4단계(블록 10건 생성)** 를 `$transaction(...)` **호출 이전**으로 끌어올려 `client`로 수행하고, 트랜잭션 안에서는 4단계를 건너뛰도록 임시 변경 | `블록 생성 도중 실패하면 새 DB에 아무 행도 남지 않는다`(18b)와 `블록 생성 후 실패하면 force가 지운 사용자 데이터가 복원된다`(18c)가 **둘 다** 실패한다. 커밋된 블록 10건이 스냅샷에 남는다. **확인 후 되돌린다** |
+| 29d | **과제 생성이 트랜잭션 안에 있는가** (R2-04) | 요구사항 2의 **6단계(과제 27건 생성)** 를 `$transaction(...)` **호출 이전**으로 끌어올려 `client`로 수행하고, 트랜잭션 안에서는 6단계를 건너뛰도록 임시 변경 | `과제 생성 후 실패하면 블록과 과제가 모두 롤백된다`(18d)가 실패한다. 커밋된 과제 27건이 스냅샷에 남는다. **확인 후 되돌린다** |
+| 29e | **트랜잭션 경계 자체가 있는가** (R2-04) | `$transaction(async (tx) => { ... })` 래퍼를 제거하고 1~7단계를 `client` 위에서 **순차 실행**하도록 임시 변경 (hook 호출 위치는 그대로) | 롤백 테스트 **4건 전부**(18·18b·18c·18d)가 실패한다. **확인 후 되돌린다** |
 
-**여섯 명령(27·28·28b·29·29b·29c)의 실제 출력을 완료 보고에 포함하고, 코드는 원상 복구된 상태여야 한다.**
+**아홉 명령(27·28·28b·29·29b·29c·29d·29e·30 계열)의 실제 출력을 완료 보고에 포함하고, 코드는 원상 복구된 상태여야 한다.** 원복 후 `git diff prisma/seed.ts`가 비어 있어야 한다.
 
-**29b·29c가 R2-04의 핵심이다.** 두 mutation이 없으면 "전체 시드가 하나의 트랜잭션"이라는 요구는 문서상의 주장일 뿐이고, 생성 단계를 트랜잭션 밖으로 뺀 구현도 exact match 테스트와 기존 rollback 테스트를 전부 통과한다. 원복 후 `git diff prisma/seed.ts`가 비어 있어야 한다.
+**29b~29e가 R2-04의 핵심이다.** 이 mutation들이 없으면 "전체 시드가 하나의 트랜잭션"이라는 요구는 문서상의 주장일 뿐이고, 어떤 단계를 트랜잭션 밖으로 뺀 구현도 exact match 테스트와 기존 rollback 테스트를 전부 통과한다.
+
+**왜 "두 번째 writer 연결"이 아니라 "트랜잭션 시작 전으로 끌어올리기"인가 (R2-04 Round 3 잔여 2).** Round 2까지의 mutation은 트랜잭션이 **열려 있는 동안** 별도 클라이언트로 같은 SQLite 파일에 쓰게 했다. SQLite는 writer를 하나만 허용하므로 그 쓰기는 `SQLITE_BUSY`/timeout으로 거절될 수 있고, 그러면 **행이 하나도 남지 않은 채** 호출이 reject되어 잘못된 구현이 롤백 테스트를 통과한다 — mutation의 실패 이유가 "부분 저장"이 아니라 "잠금"이 되는 거짓 양성이다. 위 네 mutation은 전부 **트랜잭션이 시작되기 전**에 단일 연결로 쓰기를 끝내므로 동시 writer도 `SQLITE_BUSY`도 발생하지 않는다.
+
+| 성질 | Round 2 mutation (제거됨) | 현재 mutation 29b~29e |
+|---|---|---|
+| 두 번째 writer 연결 | 필요 | **없음** — 시종일관 `client` 하나 |
+| `SQLITE_BUSY` 가능성 | 있음 | **없음** — 트랜잭션 열림 구간과 겹치지 않는다 |
+| 실패 seam이 던질 때의 DB 상태 | 불확정 (쓰기가 거절됐을 수 있음) | **최소 한 건의 write가 이미 커밋됨** |
+| 테스트가 실패하는 이유 | 잠금 오류일 수도, 부분 저장일 수도 | **부분 저장 하나뿐** — 전체 컬럼 스냅샷의 deep equality 불일치 |
+| 존재하지 않는 ID 사용 | — | **없음** |
+
+**seam의 타입·기본값·호출 위치와 운영 경로 비노출.**
+
+| 항목 | 값 |
+|---|---|
+| 타입 | `beforeCreateHook`·`afterBlocksHook`·`afterAssignmentsHook` 모두 `(() => Promise<void> \| void) \| undefined` |
+| 기본값 | `undefined`. 세 hook 모두 **선택 필드**이며 `SeedOptions`를 생략하면 하나도 주입되지 않는다 |
+| 호출 위치 | 요구사항 2의 3·5·7단계. **트랜잭션 콜백 안에서 `await`로** 부른다 (`await options?.xxxHook?.()`) |
+| 호출 횟수 | 주입된 경우 요청당 정확히 1회 |
+| 주입 주체 | **통합 테스트뿐이다.** `prisma/seed.ts`의 `main()`은 `{ force }`만 넘기며 세 hook을 절대 넘기지 않는다 |
+| 운영 API 노출 | 없음. `main()`·`db:seed`·`db:setup` 어느 경로에서도 hook을 읽거나 환경변수로 주입할 수 없다. 환경변수로 hook을 켜는 스위치를 만들지 않는다 |
+
+**production 호출 경로에서 seam이 주입되지 않는다는 조건.** `npm run db:seed`와 `npm run db:setup`은 `main()`만 실행하고, `main()`은 `seed(prisma, { force: <SEED_FORCE 해석값> })` 형태로만 호출한다. 따라서 운영 경로에서 세 hook은 항상 `undefined`이며 시드 동작은 hook이 없는 것과 동일하다.
 
 ### 정상 케이스 — 스크립트 구성 (`src/server/prisma.test.ts`, RR-03)
 
@@ -506,17 +576,21 @@ force 중 실패하면 삭제가 롤백된다
 
 #### 2-1. 개발 DB 불변 검사의 범위 (DR-11)
 
-**본체 하나가 아니라 아래 세 파일 전부**를 검증 전후로 비교한다. 개발 DB는 WAL 모드이므로(T03), 오작동한 명령의 쓰기가 `-wal`에만 남아 **본체 checksum이 같을 수 있다.** 본체만 보면 그 변경을 놓친다.
+**본체 하나가 아니라 아래 네 파일 전부**를 검증 전후로 비교한다. 개발 DB는 WAL 모드이므로(T03), 오작동한 명령의 쓰기가 `-wal`에만 남아 **본체 checksum이 같을 수 있다.** 본체만 보면 그 변경을 놓친다.
+
+**보호 대상 집합은 T03 정상 케이스 16e와 정확히 같은 네 파일이다.** 두 태스크가 같은 개발 DB를 다른 범위로 보호하면, 한쪽이 놓치는 파일이 생긴다 (T03 13-11).
 
 | 파일 | 없을 때 |
 |---|---|
 | `prisma/dev.db` | 존재 여부 자체를 `absent`로 **기록한다** (검사 생략이 아니다) |
 | `prisma/dev.db-wal` | 같음 |
 | `prisma/dev.db-shm` | 같음 |
+| `prisma/dev.db-journal` | 같음 |
 
 - 존재하는 파일은 `shasum -a 256`의 해시를 기록한다.
 - **존재하지 않던 파일이 생기거나, 있던 파일이 사라지는 것도 변경이다.** 그래서 존재 여부를 상태의 일부로 기록한다.
-- 세 파일이 모두 없는 깨끗한 저장소에서도 전후 스냅샷이 같으므로 검사는 그대로 성립한다.
+- 네 파일이 모두 없는 깨끗한 저장소에서도 전후 스냅샷이 같으므로 검사는 그대로 성립한다.
+- **이 검사는 개발 DB 파일을 만들거나 지우거나 고치지 않는다.** `prisma/dev.db-journal`이 존재하면 해시를 기록해 전후를 비교하고, 존재하지 않으면 `absent` 상태가 전후 동일한지만 확인한다. 없는 파일을 만들어 두고 검사하지 않는다.
 
 #### 2-2. 검증 스크립트
 
@@ -530,7 +604,7 @@ set -u          # -e를 쓰지 않는다 — 원래 종료 코드를 직접 다�
 VERIFY_DB="$PWD/.tmp/verify-setup-$$.db"
 mkdir -p "$PWD/.tmp"
 
-DEV_DB_FILES=("prisma/dev.db" "prisma/dev.db-wal" "prisma/dev.db-shm")
+DEV_DB_FILES=("prisma/dev.db" "prisma/dev.db-wal" "prisma/dev.db-shm" "prisma/dev.db-journal")
 
 snapshot_dev_db() {
   local f
@@ -554,7 +628,7 @@ finish() {
   trap - EXIT                 # 재진입 방지
 
   # (1) cleanup — 임시 DB와 sidecar
-  rm -f "$VERIFY_DB" "$VERIFY_DB-wal" "$VERIFY_DB-shm" || CLEANUP_FAILED=1
+  rm -f "$VERIFY_DB" "$VERIFY_DB-wal" "$VERIFY_DB-shm" "$VERIFY_DB-journal" || CLEANUP_FAILED=1
 
   # (2) 개발 DB 불변 검사 — 정상 경로와 실패 경로 모두에서 실행된다
   AFTER="$(snapshot_dev_db)"
@@ -619,12 +693,12 @@ exit 0
 trap 설치부터 종료까지의 순서는 **모호함 없이 아래 하나뿐이다.**
 
 ```
-1. BEFORE 스냅샷 (존재 여부 + 해시, 3파일)
+1. BEFORE 스냅샷 (존재 여부 + 해시, 4파일)
 2. trap finish EXIT 설치
 3. 검증 본문 (A) → (B) → (C) 실행
 4. (어떤 경로로 끝나든) trap 진입
 5.   ORIGINAL_STATUS 저장
-6.   cleanup: 임시 .db / -wal / -shm 삭제
+6.   cleanup: 임시 .db / -wal / -shm / -journal 삭제
 7.   AFTER 스냅샷 + BEFORE와 비교
 8.   종료 코드 판정: 불변 검사 실패(2) > cleanup 실패(3) > ORIGINAL_STATUS
 ```
@@ -634,8 +708,8 @@ trap 설치부터 종료까지의 순서는 **모호함 없이 아래 하나뿐�
 | (A) `db:setup` | `journal_mode=wal`과 `seeded books=9 blocks=10 assignments=27 (skipped: blocks=false assignments=false)`가 **한 번의 실행**으로 나온다 |
 | (B) 단일 실행 결과 확인 | `migrations=1 journal_mode=wal books=9 blocks=10 assignments=27`, 종료 코드 0 |
 | (C) 2회차 `db:seed` | `skipped: blocks=true assignments=true`, 종료 코드 0 |
-| 개발 DB 3파일 | 존재 여부와 해시가 전후 동일 |
-| cleanup | 임시 `.db`·`-wal`·`-shm` 전부 삭제 |
+| 개발 DB 4파일 | 존재 여부와 해시가 전후 동일 (`prisma/dev.db`·`-wal`·`-shm`·`-journal`) |
+| cleanup | 임시 `.db`·`-wal`·`-shm`·`-journal` 전부 삭제 |
 | 최종 종료 코드 | 위 전부 만족 시 `0` |
 
 `migrations`가 `0`이면 마이그레이션이 적용되지 않은 것이다. 값이 `1`이 아니라 그 이상이면 마이그레이션이 추가된 것이므로 `>= 1`로 판정한다.
@@ -646,13 +720,14 @@ trap 설치부터 종료까지의 순서는 **모호함 없이 아래 하나뿐�
 
 - **완료 검증을 위해 `prisma/dev.db`를 지우거나 `SEED_FORCE=1`로 실행하지 않는다** (DR-11). 개발 DB를 대상으로 `db:setup`·`db:deploy`·`db:seed`·`prisma migrate`·`prisma migrate reset` 중 어느 것도 완료 검증의 일부로 실행하지 않는다.
 - **완료 검증에서 `SEED_FORCE`를 상속하지 않는다.** 모든 검증 명령을 `env -u SEED_FORCE`로 실행한다 (DR-11).
-- **개발 DB 불변 검사를 `prisma/dev.db` 본체 하나로 줄이지 않는다.** `-wal`·`-shm`을 함께 본다 (DR-11의 2-1).
+- **개발 DB 불변 검사를 `prisma/dev.db` 본체 하나로 줄이지 않는다.** `-wal`·`-shm`·`-journal`을 함께 본다 (DR-11의 2-1). **보호 대상 4파일은 T03 정상 케이스 16e와 같은 집합이며, 한쪽만 줄이지 않는다.**
 - **하위 script만 따로 실행하고 `db:setup`을 검증했다고 보고하지 않는다** (RR-03). 완료 조건 2의 (A)는 `npm run db:setup` 한 줄이어야 한다.
 - 완료 검증의 `DATABASE_URL`을 상대 경로나 개발 DB 경로로 두지 않는다. `.tmp/` 아래의 **절대 경로**를 쓴다 (D19의 상대 경로 함정).
 - `prisma/seed.ts`가 `tests/fixtures/seed-expected.ts`를 import 하지 않는다. 그 반대도 금지 (DR-09).
 - `update: {}` 대신 시드값을 넣어 기존 Book을 덮어쓰지 않는다 (DR-10).
 - `force`에서 `Book`을 `deleteMany` 하지 않는다.
-- **삭제·생성을 트랜잭션 밖에서 수행하지 않는다.** Book upsert·삭제·블록 생성·과제 생성이 **전부** 같은 `tx` 위에서 일어난다 (요구사항 2). 위반 케이스 29b·29c는 검증용 임시 변경이며 반드시 원복한다.
+- **삭제·생성을 트랜잭션 밖에서 수행하지 않는다.** Book upsert·삭제·블록 생성·과제 생성이 **전부** 같은 `tx` 위에서 일어난다 (요구사항 2). 위반 케이스 29b·29c·29d·29e는 검증용 임시 변경이며 반드시 원복한다.
+- **롤백 검증에 두 번째 writer 연결이나 `SQLITE_BUSY`를 쓰지 않는다.** 존재하지 않는 Assignment ID로 실패를 만드는 방법도 쓰지 않는다 (R2-04 Round 3).
 - **`beforeCreateHook`·`afterBlocksHook`·`afterAssignmentsHook`을 `main()`이나 프로덕션 경로에서 넘기지 않는다.** `main()`이 만드는 옵션 객체는 정확히 `{ force }`이며 hook 키를 포함하지 않는다. 세 hook은 `seed()`의 **선택적 인자로만** 존재하고, 환경변수·CLI 인자·HTTP 요청 등 어떤 외부 입력으로도 켤 수 없다 (T03 스펙 미정 7과 같은 원칙).
 - 테스트를 위해 시드 로직을 복제한 **별도의 "테스트용 시드 함수"를 만들지 않는다.** 롤백 테스트는 실제 `seed()`를 그대로 호출해야 한다 (요구사항 2-A).
 - **롤백 테스트의 판정을 `tests/fixtures/seed-expected.ts`와의 비교로 바꾸지 않는다.** 호출 전 스냅샷과 비교한다 (요구사항 2-B).
@@ -690,5 +765,5 @@ trap 설치부터 종료까지의 순서는 **모호함 없이 아래 하나뿐�
 | 15 | `db:setup`을 두 곳에서 검증하는 이유 | 문자열 검사(케이스 30)는 **순서와 구성**을, 실행 검사(완료 조건 2)는 **실제로 동작하는지**를 본다. 어느 한쪽도 다른 쪽을 대신하지 못한다 (RR-03) |
 | 16 | 완료 검증의 종료 코드 우선순위 | **불변 검사 실패(2) > cleanup 실패(3) > 원래 명령의 종료 코드.** 개발 데이터 변경이 가장 심각하므로 다른 실패를 덮어쓴다. 반대로 하면 검증 명령이 실패한 실행에서 데이터 변경 사실이 묻힌다 (DR-11) |
 | 17 | `set -e`를 쓰지 않는 이유 | 원래 명령의 종료 코드를 보존하고 실패 경로에서도 불변 검사를 돌려야 하기 때문이다. `set -e`는 중간 실패 시 즉시 빠져나가 `ORIGINAL_STATUS` 판정을 어렵게 만든다. 대신 각 명령에 `\|\| exit $?`를 붙이고 `EXIT` trap 하나가 정리·검사를 책임진다 (DR-11) |
-| 18 | 개발 DB 불변 검사에 sidecar를 포함하는 이유 | 개발 DB는 WAL 모드(T03)이므로 쓰기가 `-wal`에만 남아 **본체 해시가 그대로일 수 있다.** 본체만 보면 변경을 놓친다. 존재 여부까지 상태로 기록하는 이유는 파일이 새로 생기거나 사라지는 것도 변경이기 때문이다 (DR-11) |
+| 18 | 개발 DB 불변 검사에 sidecar를 포함하는 이유 | 개발 DB는 WAL 모드(T03)이므로 쓰기가 `-wal`에만 남아 **본체 해시가 그대로일 수 있다.** 본체만 보면 변경을 놓친다. 존재 여부까지 상태로 기록하는 이유는 파일이 새로 생기거나 사라지는 것도 변경이기 때문이다 (DR-11). `-journal`을 포함하는 이유는 WAL 적용 전 구간이나 비정상 종료 후에 rollback journal이 남을 수 있고, **T03 16e가 보호하는 집합과 범위를 하나로 맞춰야 하기 때문이다** |
 | 19 | `SEED_FORCE` unset을 명시하는 이유 | 셸에 남아 있던 값을 상속하면 완료 검증이 조용히 force 경로를 타고, 그 결과 "비파괴가 기본"이라는 성질이 검증되지 않는다. 모든 검증 명령에 `env -u SEED_FORCE`를 붙인다 (DR-11) |
