@@ -1,22 +1,22 @@
 # Workflow Status
 
 - current_branch: docs/specs-batch1
-- stage: spec-revision
-- doc_status: ready-for-rereview
+- stage: spec-rereview-complete
+- doc_status: changes-required
 - active_tasks: T01, T02, T03, T04
 - spec_writer: claude
 - spec_reviewer: codex
-- review_round: 2
-- review_target_commit: 2557d75bd5e56b371dd81980985206bc75df4a31
-- review_file: docs/reviews/DR-T01-T04-spec-rereview-round2.md
-- previous_review_file: docs/reviews/DR-T01-T04-spec-rereview-round1.md
+- review_round: 3
+- review_target_commit: 4ff75fa5a838482ac7223fc82499bffcdc0cbcdf
+- review_file: docs/reviews/DR-T01-T04-spec-rereview-round3.md
+- previous_review_file: docs/reviews/DR-T01-T04-spec-rereview-round2.md
 - original_review_file: docs/reviews/DR-T01-T04-spec-review.md
 - original_review_commit: b4511c7
 - rereview_base_commit: c77ab5c33122da5fd3414e1ed054fe22224506fc
 - revision_round: 3
 - revision_baseline_commit: 8b8c0512af62cb00902ca50901159590a5b4ebb9
 - overall_verdict: BLOCK
-- T01_verdict: BLOCK
+- T01_verdict: PASS
 - T02_verdict: PASS
 - T03_verdict: BLOCK
 - T04_verdict: BLOCK
@@ -24,18 +24,18 @@
 - requirements_file: docs/requirements.md
 - requirements_source: user statements of 2026-08-01 (requirements + AP-01..AP-12 decisions + OPEN-01 decision + OPEN-02 decision) + both mockups
 - unapproved_design_assumptions: 0
-- open_implementation_details: 0
-- open_implementation_detail_ids: (none) — OPEN-01, OPEN-02 both decided by the user on 2026-08-01
-- next_action: Codex independent rereview of the Claude revision (DR-12, RR-01, RR-02, R2-01..R2-05 + the OPEN-02 closure)
-- next_owner: codex
+- open_implementation_details: 1
+- open_implementation_detail_ids: R3-01 — `{ date, to }` bulk-status의 NOT_FOUND·빈 날짜·validation/HTTP·결정적 rollback test 계약
+- next_action: Claude fixes Round 3 residual/new findings; then Codex independently performs Round 4 rereview
+- next_owner: claude
 
 ## Verdict ownership
 
-**Only Codex changes finding verdicts.** Claude is the spec author and does not mark its own work `RESOLVED` or `PASS`. 아래 revision 3의 항목은 전부 `addressed_by_claude` / `pending_codex_verification`이며, **현재 `overall_verdict`와 태스크별 판정은 Codex Round 2의 결과 그대로다.** Claude는 그 값을 바꾸지 않았다.
+**Only Codex changes finding verdicts.** Claude is the spec author and does not mark its own work `RESOLVED` or `PASS`. 아래 revision 3의 `addressed_by_claude` / `pending_codex_verification` 이력은 그대로 보존한다. **현재 `overall_verdict`와 태스크별 판정은 Codex Round 3의 결과다.**
 
-`remaining_P1` / `remaining_P2` / `remaining_P3`도 **Codex Round 2 값을 그대로 둔다.** Claude가 수정했다는 사실만으로 0으로 내리지 않는다.
+Round 2와 Claude revision 3의 집계는 과거 이력이다. 현재 잔여 심각도는 아래 **Round 3 — Codex verdict** 절이 정의한다.
 
-`doc_status`는 `OPEN-02`가 2026-08-01 사용자 승인으로 종결되면서 `blocked-on-user-decision` → `ready-for-rereview`로 바뀌었다. **그것은 "문서가 검토 받을 준비가 됐다"는 뜻일 뿐 Finding이 해소됐다는 뜻이 아니다.** `implementation_allowed`는 계속 `false`이고, 8개 Finding은 전부 Codex 검증 대기 상태다.
+`doc_status`는 Round 3에서 구현 차단 P2가 남아 `changes-required`다. `OPEN-02`의 두 사용자 정책 값은 결정됐지만 날짜 기반 API로 옮기는 계약은 R3-01 때문에 미결 1건이다. `implementation_allowed`는 계속 `false`다.
 
 ## Finding Status
 
@@ -88,6 +88,42 @@
 | R2-03 | P3 | requirements — range block count |
 | R2-04 | P2 | T04 — creation-stage rollback test gap |
 | R2-05 | P3 | architecture — pilot date/overdue count mismatch |
+
+### Round 3 — Codex verdict at target `4ff75fa`
+
+- rereviewed_existing_findings_total_round3: 8
+- existing_resolved_round3: 4
+- existing_partially_resolved_round3: 4
+- existing_unresolved_round3: 0
+- existing_regressed_round3: 0
+- new_findings_total_round3: 2
+- new_P0_round3: 0
+- new_P1_round3: 0
+- new_P2_round3: 1
+- new_P3_round3: 1
+- remaining_P0: 0
+- remaining_P1: 0
+- remaining_P2: 4
+- remaining_P3: 2
+- remaining_P0_P1: 0
+
+| Finding | Codex Round 3 verdict | Current severity | Implementation blocking | Remaining issue |
+|---|---|---:|---|---|
+| DR-12 | PARTIALLY RESOLVED | P2 | yes — T03 | `-journal` mutation이 파일을 결정적으로 만들지 않고 기대 경로가 구현 상수를 공유할 수 있음; dev `-journal` 불변 검사 누락 |
+| RR-01 | PARTIALLY RESOLVED | P3 | no | stale `31개`, OPEN-02 출처 누락, MR-30 역추적 누락 |
+| RR-02 | RESOLVED | — | no | — |
+| R2-01 | RESOLVED | — | no | — |
+| R2-02 | PARTIALLY RESOLVED | P2 | yes — overall/T09·T17 | 정책 값은 결정됐으나 날짜 요청의 실패 계약 R3-01이 남음 |
+| R2-03 | RESOLVED | — | no | — |
+| R2-04 | PARTIALLY RESOLVED | P2 | yes — T04 | snapshot이 전체 DB가 아니고 외부 client mutation이 SQLite writer lock으로 거짓 양성 가능 |
+| R2-05 | RESOLVED | — | no | — |
+
+| New Finding | Severity | Target | Implementation blocking |
+|---|---:|---|---|
+| R3-01 | P2 | requirements/architecture, follow-up T09·T17 | yes — overall |
+| R3-02 | P3 | requirements authority/traceability | no |
+
+Round 3 태스크 판정은 **T01 PASS / T02 PASS / T03 BLOCK / T04 BLOCK / overall BLOCK**이다. 상세 근거는 `docs/reviews/DR-T01-T04-spec-rereview-round3.md`에 있다.
 
 ### Revision 3 — Claude 수정 (baseline `8b8c051`, 미커밋)
 
@@ -176,4 +212,4 @@ All twelve are resolved. **No unapproved design assumption remains.**
 
 `implementation_allowed` is `false`. No implementation, package install, DB operation, branch change, commit, push, PR, merge, or deployment is authorized by this status.
 
-Claude의 revision 3 수정이 끝났고, 그 안에 남아 있던 유일한 사용자 결정(`OPEN-02`)도 2026-08-01에 승인·반영됐다. **다음 담당자는 Codex**이며, 이번 수정본을 독립 재검토해 각 Finding의 RESOLVED 여부와 `implementation_allowed`를 판정한다. Claude는 자신의 수정을 RESOLVED로 판정하지 않았고 Codex Round 2의 판정·리뷰 원문도 바꾸지 않았다.
+Codex Round 3 재검토는 완료됐다. **다음 담당자는 Claude**이며 DR-12, RR-01, R2-02, R2-04, R3-01, R3-02를 문서에서 수정한 뒤 Codex에 Round 4 독립 재검토를 요청한다. Claude revision 3의 자기 보고와 Codex Round 2 기록은 과거 이력으로 보존했다.
