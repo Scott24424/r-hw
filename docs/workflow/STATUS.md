@@ -1,12 +1,15 @@
 # Workflow Status
 
 - current_branch: docs/specs-batch1
-- stage: spec-revision
-- doc_status: ready-for-rereview
+- stage: spec-rereview-complete
+- doc_status: changes-required
 - active_tasks: T01, T02, T03, T04
 - spec_writer: claude
 - spec_reviewer: codex
-- review_file: docs/reviews/DR-T01-T04-spec-rereview-round1.md
+- review_round: 2
+- review_target_commit: 2557d75bd5e56b371dd81980985206bc75df4a31
+- review_file: docs/reviews/DR-T01-T04-spec-rereview-round2.md
+- previous_review_file: docs/reviews/DR-T01-T04-spec-rereview-round1.md
 - original_review_file: docs/reviews/DR-T01-T04-spec-review.md
 - original_review_commit: b4511c7
 - rereview_base_commit: c77ab5c33122da5fd3414e1ed054fe22224506fc
@@ -14,26 +17,26 @@
 - revision_baseline_commit: 944fe85
 - overall_verdict: BLOCK
 - T01_verdict: BLOCK
-- T02_verdict: BLOCK
+- T02_verdict: PASS
 - T03_verdict: BLOCK
 - T04_verdict: BLOCK
 - implementation_allowed: false
 - requirements_file: docs/requirements.md
 - requirements_source: user statements of 2026-08-01 (requirements + AP-01..AP-12 decisions + OPEN-01 decision) + both mockups
 - unapproved_design_assumptions: 0
-- open_implementation_details: 0
-- next_action: Codex independently rereviews round2 spec revisions
-- next_owner: codex
+- open_implementation_details: 1
+- next_action: Claude fixes Round 2 residual and new findings; then Codex independently rereviews
+- next_owner: claude
 
 ## Verdict ownership
 
-**Only Codex changes finding verdicts.** Claude is the spec author and does not mark its own work `RESOLVED` or `PASS`. Every Claude change in round 2 is recorded as `addressed_by_claude` or `pending_codex_verification` only. `overall_verdict` and the per-task verdicts remain exactly as Codex left them at `944fe85`, and `implementation_allowed` stays `false`.
+**Only Codex changes finding verdicts.** Claude is the spec author and does not mark its own work `RESOLVED` or `PASS`. Claude가 제출한 `addressed_by_claude` / `pending_codex_verification` 이력은 아래에 보존하고, 현재 `overall_verdict`와 태스크별 판정은 Codex의 Round 2 결과다.
 
-`doc_status` is `ready-for-rereview` because the documents are now internally consistent and every user decision is reflected — **not** because any finding has been judged resolved.
+`doc_status`는 Round 2에서 잔여·신규 결함이 확인됐으므로 `changes-required`다. `implementation_allowed`는 계속 `false`다.
 
 ## Finding Status
 
-Counts below are Codex's round 1 numbers at `944fe85` and are **not** adjusted by Claude's revisions.
+### Round 1 snapshot — Codex at `944fe85`
 
 - existing_findings_total: 14
 - existing_resolved: 10
@@ -47,7 +50,43 @@ Counts below are Codex's round 1 numbers at `944fe85` and are **not** adjusted b
 - remaining_P3: 0
 - remaining_P0_P1: 5
 
-### Round 2 — Claude revisions (pending Codex verification)
+### Round 2 — Codex verdict at target `2557d75`
+
+- rereviewed_existing_findings_total: 7
+- existing_resolved_round2: 4
+- existing_partially_resolved_round2: 3
+- existing_unresolved_round2: 0
+- existing_regressed_round2: 0
+- new_findings_total_round2: 5
+- new_P0_round2: 0
+- new_P1_round2: 0
+- new_P2_round2: 3
+- new_P3_round2: 2
+- remaining_P0: 0
+- remaining_P1: 2
+- remaining_P2: 4
+- remaining_P3: 2
+- remaining_P0_P1: 2
+
+| Finding | Codex Round 2 verdict | Remaining issue |
+|---|---|---|
+| DR-03 | RESOLVED | — |
+| DR-07 | RESOLVED | — |
+| DR-11 | RESOLVED | — |
+| DR-12 | PARTIALLY RESOLVED | template rollback journal, finalize failure, sidecar deletion false positive |
+| RR-01 | PARTIALLY RESOLVED | requirements authority/traceability defects; R2-01~R2-03 |
+| RR-02 | PARTIALLY RESOLVED | mutation case 15 cannot produce its specified missing-plugin error |
+| RR-03 | RESOLVED | — |
+
+| New Finding | Severity | Target |
+|---|---|---|
+| R2-01 | P2 | requirements/architecture — 48×48 vs 44×44 |
+| R2-02 | P2 | requirements/architecture/STATUS — open detail and trace count |
+| R2-03 | P3 | requirements — range block count |
+| R2-04 | P2 | T04 — creation-stage rollback test gap |
+| R2-05 | P3 | architecture — pilot date/overdue count mismatch |
+
+### Round 2 제출 당시 Claude revisions — historical pending state
 
 | Finding | Codex round 1 verdict | Claude round 2 state | What changed |
 |---|---|---|---|
@@ -87,7 +126,7 @@ All twelve are resolved. **No unapproved design assumption remains.**
 
 ## OPEN-01 — decided 2026-08-01
 
-**Which date the 10 seeded schedule blocks belong to: `2026-07-29`.** Promoted to `UR-26` with conditions `UR-26.1`…`UR-26.6`. **No open implementation detail remains.**
+**Which date the 10 seeded schedule blocks belong to: `2026-07-29`.** Promoted to `UR-26` with conditions `UR-26.1`…`UR-26.6`. **OPEN-01 자체는 해결됐다.** 다만 Codex Round 2는 별개의 UR-25.3 실패 정책을 미결 구현 상세 1건으로 판정했다(R2-02).
 
 - The date is **user-designated**, not read from `daily-schedule.jpg` (which has no date, MR-20). Documents must not claim it was read from the image — same property as the year `2026` under UR-15.3.
 - **The other 19 days having no schedule is intended behaviour** (UR-26.2, UR-26.4), not a defect, and must not be reported as a failure. Schedule templates are outside the MVP (UR-26.3, NR-03); users enter each day's schedule (UR-26.5).
@@ -98,4 +137,4 @@ All twelve are resolved. **No unapproved design assumption remains.**
 
 `implementation_allowed` is `false`. No implementation, package install, DB operation, branch change, commit, push, PR, merge, or deployment is authorized by this status.
 
-The round 2 revisions are unverified. **Codex is the next owner**; Claude does not verify its own specs (CLAUDE.md), and only Codex changes finding verdicts.
+Round 2 재검토는 완료됐다. **다음 담당자는 Claude**이며, Round 2 리뷰의 잔여 Finding 3건과 신규 Finding 5건을 문서에서 수정한 뒤 Codex 독립 재검토를 다시 요청한다.
