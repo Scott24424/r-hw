@@ -4,6 +4,29 @@
 
 `architecture.md` §1.2의 스키마를 Prisma로 옮기고, 초기 마이그레이션과 WAL 클라이언트를 만들고, **생성된 DB 구조가 설계와 일치함을 기계적으로 검증한다.**
 
+## 요구사항 추적
+
+| 근거 | 스키마의 어느 부분 |
+|---|---|
+| UR-04, UR-05 | `Assignment.date`, `Assignment.orderIndex` — 날짜별 배치와 한 날짜의 여러 항목 |
+| UR-07, UR-08 | `ScheduleBlock.startMinute` / `endMinute` / `label`, `ScheduleBlock_date_startMinute_idx` — 시작·종료 시간대와 시간 순서 조회 |
+| **UR-16, UR-16.1, UR-16.2** | **`ScheduleBlock.date` 컬럼과 `@@index([date, startMinute])`.** 2026-08-01 결정으로 시간표는 날짜 없이 매일 반복되지 않는다 |
+| UR-10, UR-12 | `ScheduleBlock.matchType` — 전체 계획과 하루 계획의 연결 (D11) |
+| UR-11 | `@@index([date, status])` — 날짜별 숙제 목록 조회 |
+| MR-05, MR-06 | `Book` 테이블, `Book.title @unique`, `Book.progressUnit` |
+| MR-07, MR-08 | `Assignment.endUnit` nullable, `Assignment.startUnit` nullable |
+| MR-21 | `ScheduleBlock.endMinute` nullable (시점 마커) |
+| MR-26 | `ScheduleBlock.matchType` nullable (순수 루틴 블록) |
+| OR-03 | 구조 검증 테스트와 테스트 DB 헬퍼 전체 |
+| UR-14 | Prisma·SQLite·enum(D13)·Node 정책(D21) 전체 |
+| UR-17 | `AssignmentStatus` enum, `Assignment.status` 기본값, `Assignment.completedAt` |
+| UR-18 | `@@index([date, status])` — `OVERDUE`를 저장하지 않고 파생 계산하기 위한 인덱스 |
+| UR-23, UR-23.1 | `Book.archivedAt` |
+| **UR-24.3** | **`db:setup`은 파일럿·개발 초기화 명령이다** (요구사항 7-A) |
+| UR-26 | 시드 블록의 날짜(`2026-07-29`)는 T04가 넣는다. **T03은 `date` 컬럼만 만들고 값을 넣지 않는다** |
+
+**설계 가정 12건(AP-01~AP-12)은 2026-08-01에 전부 처리되었다.** 이 태스크에 영향을 준 것은 **AP-03의 거절**이며, 그 결과가 위 `UR-16` 행이다. 상세는 [`requirements.md` §6](../requirements.md#6-ur-16이-바꾼-데이터-모델-ap-03-거절의-결과).
+
 ## 선행 태스크
 
 T02
@@ -74,7 +97,32 @@ datasource db {
 
 이어서 §1.2의 `enum` 5개(`AssignmentType`, `AssignmentStatus`, `ProgressUnit`, `BookLanguage`, `BlockKind`)와 `model` 3개(`Book`, `Assignment`, `ScheduleBlock`)를 그대로 옮긴다. 주석도 함께 옮긴다 — 필드의 NULL 의미(D5)가 주석에 담겨 있다.
 
-3. **SQLite의 enum은 Prisma 계층에서만 강제된다.** DB에는 `TEXT` 컬럼으로 생성되고 `CHECK` 제약이 붙지 않는다. 따라서 구조 검증(요구사항 D)은 `CHECK` 제약을 기대하지 않으며, 값 범위 보장은 Prisma Client의 타입과 Zod(T07)가 담당한다. 이것이 D13이 남긴 대가이며 새로운 문제가 아니다.
+> **`ScheduleBlock`은 `date String`을 갖는다 (UR-16).** 2026-08-01 사용자 결정으로 "날짜 없이 매일 반복되는 시간표"라는 초안 모델이 **거절**되었다. `architecture.md` §1.2의 현재 정의를 그대로 옮기면 되며, 확인 지점은 두 곳이다.
+>
+> - `date String`이 `id` 다음, `startMinute` 앞에 있다 (컬럼 순서가 요구사항 20의 기대값이다).
+> - 인덱스가 `@@index([date, startMinute])`이다. **`@@index([startMinute])`를 남기지 않는다.**
+>
+> 타입은 `DateTime`이 아니라 `String`이다 — `Assignment.date`와 같은 이유다 (D9).
+
+3. **SQLite enum의 보장 수준 (DR-07).** 아래 표는 [`architecture.md` §1.5](../architecture.md#15-불변식-invariants--반드시-테스트로-고정할-것)와 [`decisions.md` D13](../decisions.md#d13)의 같은 표와 **한 글자도 다르면 안 된다.** 셋 중 하나만 바뀌면 데이터 무결성의 단일 출처가 갈라진다.
+
+| # | 사실 | 담당 |
+|---|---|---|
+| 1 | **SQLite DB와 생성된 migration은 enum 값 범위를 DB 수준에서 강제하지 않는다.** | — |
+| 2 | SQLite 컬럼은 `TEXT`로 만들어지며 enum용 `CHECK` 제약이 붙지 않는다. | — |
+| 3 | enum 타입과 값 검사는 **Prisma ORM/Client 계층**에서 제공된다. | Prisma (D13) |
+| 4 | 따라서 raw SQL이나 Prisma 계층을 우회한 쓰기로 **invalid 값이 저장될 수 있다.** | — |
+| 5 | 그렇게 저장된 invalid 값은 **Prisma Client 조회 시 런타임 오류를 일으킬 수 있다.** | — |
+| 6 | 외부 입력의 값 범위 검증은 **Zod가 담당한다** (`z.nativeEnum`). | **T07** |
+| 7 | 서비스 계층 우회 금지(D14)는 값 범위가 아니라 **여러 필드에 걸친 불변식과 쓰기 경로**를 보호한다. | D14 |
+
+공식 근거: [Prisma — SQLite connector](https://www.prisma.io/docs/orm/overview/databases/sqlite) — "SQLite doesn't enforce enum values at the database level.", "Invalid values will cause Prisma Client queries to fail at runtime.", 타입 매핑 표에서 Prisma `Enum` → SQLite `TEXT`. 확인일 **2026-08-01**.
+
+**이 태스크에 대한 함의:**
+
+- 구조 검증(요구사항 D)은 `CHECK` 제약이 **없다는 것**을 기대한다. 있으면 전제가 다른 것이므로 요구사항 22의 구분에 따라 보고한다.
+- 정상 케이스 13(`enum 컬럼에는 CHECK 제약이 없다`)은 위 사실 1·2를 DB에서 직접 확인하는 장치다. **삭제하지 않는다** — 문서가 말하는 보장 수준과 실제 DB가 같은 모습인지 고정한다.
+- T03은 값 범위를 지키는 코드를 만들지 않는다. 그것은 T07(Zod)의 범위다.
 
 4. `npm run db:validate`가 통과해야 한다. **enum 때문에 실패하면 진행하지 말고 즉시 보고한다** — D13의 버전 전제가 깨진 것이며 설계 결정 재검토가 필요하다.
 
@@ -143,6 +191,13 @@ export async function getJournalMode(client: PrismaClient): Promise<string> {
 "db:setup":    "npm run db:deploy && npm run db:wal"
 ```
 
+7-A. **`db:setup`은 파일럿·개발 초기화 명령이다** (UR-24.3). 일반 운영 배포용 초기화 명령이 아니다.
+
+   - T04가 여기에 `db:seed`를 이어붙이면 이 명령은 **개인 숙제 데이터를 주입**하게 된다. 그 성격을 스크립트 주석이 아니라 **문서에 명시**해 두는 것이 이 항목의 목적이다.
+   - **일반 배포 과정에서 사용자 확인 없이 개인 데이터가 자동 주입되어서는 안 된다** (UR-24.2). 따라서 `db:setup`을 프로덕션 기동 스크립트(`serve`)나 배포 절차에 넣지 않는다.
+   - 일반 배포용 초기화 명령과 파일럿 시드 명령의 **분리는 후속 범위**이며(UR-24.4), `architecture.md` 부록 A.3의 "배포용 초기화" 항목이다. **이 태스크에서 새 스크립트나 태스크 번호를 만들지 않는다** (UR-16.4).
+   - CI의 e2e job이 `db:setup`을 부르는 것은 **테스트 환경**이므로 UR-24.1의 허용 범위 안이다.
+
 8. **기본값 리터럴을 갖는 스크립트의 집합은 정확히 아래 6개다.** `db:setup`은 다른 스크립트를 `npm run`으로 조합할 뿐이므로 리터럴을 갖지 않는다. 이 집합이 요구사항 17의 exact match 테스트 기대값이다.
 
 ```
@@ -189,8 +244,20 @@ export interface TestDb {
 }
 
 export interface CreateTestDbOptions {
-  /** 복사 직후·WAL 적용 전에 호출된다. 실패 경로 정리를 검증하기 위한 테스트 전용 seam. */
+  /** 복사 직후·WAL 적용 전에 호출된다. 복사 이후 실패 경로 정리를 검증하기 위한 테스트 전용 seam. */
   afterCopyHook?: () => void | Promise<void>;
+
+  /**
+   * 템플릿 생성 중 migrate 성공 직후·rename 직전에 호출된다.
+   * 템플릿 생성 실패 정리를 검증하기 위한 테스트 전용 seam (DR-12).
+   */
+  beforeTemplateFinalizeHook?: () => void | Promise<void>;
+
+  /**
+   * 이 호출에 한해 기존 템플릿을 무시하고 다시 만든다.
+   * 위 hook을 결정적으로 태우기 위한 테스트 전용 seam. 기본값 false.
+   */
+  forceTemplateRebuild?: boolean;
 }
 
 export async function createTestDb(options?: CreateTestDbOptions): Promise<TestDb>;
@@ -209,12 +276,67 @@ export function computeMigrationsFingerprint(migrationsDir: string): string;
 | 13-1 | 저장소 루트는 `fileURLToPath(new URL("../../", import.meta.url))`로 구한다. 모든 경로는 **절대 경로**로 다룬다 | 상대 경로가 `schema.prisma` 기준으로 해석되는 함정 (D19) |
 | 13-2 | 템플릿은 `.tmp/test-template.db`, 지문은 `.tmp/test-template.meta.json`(`{ "fingerprint": "..." }`)에 둔다 | — |
 | 13-3 | 템플릿을 쓰기 전에 `computeMigrationsFingerprint(<root>/prisma/migrations)`와 meta의 값을 비교한다. **다르거나 meta가 없으면 템플릿을 다시 만든다** | 새 마이그레이션 추가 후 stale schema를 계속 복사하는 문제 |
-| 13-4 | 템플릿 생성은 유일한 임시 이름(`test-template.<pid>-<랜덤>.db`)에 `prisma migrate deploy`를 실행한 뒤 `fs.renameSync`로 최종 경로에 옮긴다. meta도 같은 방식으로 원자적으로 쓴다 | 워커 동시 진입 시 반쯤 만들어진 템플릿을 읽는 문제 |
-| 13-5 | 자식 프로세스 환경은 **반드시 `{ ...process.env, DATABASE_URL: url }`** 로 넘긴다 | `env: { DATABASE_URL }`만 넘기면 `PATH`가 사라져 macOS arm64 Homebrew 환경에서 `npx` 탐색이 실패한다 |
+| 13-4 | 템플릿 생성은 유일한 임시 이름(`test-template.<pid>-<랜덤>.db`)에 마이그레이션을 적용한 뒤 `fs.renameSync`로 최종 경로에 옮긴다. meta도 유일한 임시 이름(`test-template.<pid>-<랜덤>.meta.json`)에 쓴 뒤 rename 한다 | 워커 동시 진입 시 반쯤 만들어진 템플릿을 읽는 문제 |
+| 13-5 | 자식 프로세스 환경은 **반드시 `{ ...process.env, DATABASE_URL: <임시 템플릿의 절대 file URL> }`** 로 넘긴다 | `env: { DATABASE_URL }`만 넘기면 `PATH`가 사라져 macOS arm64 Homebrew 환경에서 실행 파일 탐색이 실패한다 |
 | 13-6 | 템플릿에는 WAL을 적용하지 않는다. 복사본마다 `enableWal`을 적용한다 | WAL 상태 DB를 `-wal` 없이 복사할 때의 애매함 |
-| 13-7 | 복사 이후의 모든 단계를 `try/catch`로 감싸고, **실패 시 그때까지 만든 `.db`/`.db-wal`/`.db-shm`을 지우고 다시 throw 한다** | 반환 전에 실패하면 cleanup 핸들이 없어 파일이 누적되는 문제 |
-| 13-8 | 만들어진 모든 DB를 모듈 수준 registry에 등록하고, `cleanup()`이 성공하면 registry에서 제거한다. `cleanupAllTestDbs()`는 남은 전부를 정리한다 | 테스트가 직접 만든 추가 DB의 누락, assertion 실패로 인한 누수 |
-| 13-9 | `cleanup()`은 `$disconnect()` 후 `.db`, `.db-wal`, `.db-shm` 세 파일을 지운다. 없으면 무시하고, 두 번 불려도 오류가 없다 | sidecar 파일 누적 |
+| 13-7 | **템플릿 생성 전체**(migrate · rename · meta write)를 `try/catch`로 감싸고, 실패 시 그 호출이 만든 임시 파일 4종을 **전부** 지운 뒤 다시 throw 한다 → 요구사항 13-A | migrate·rename·meta write 실패 시 임시 템플릿과 sidecar가 `.tmp/`에 남는 문제 (DR-12) |
+| 13-8 | 복사 이후의 모든 단계를 `try/catch`로 감싸고, **실패 시 그때까지 만든 `.db`/`.db-wal`/`.db-shm`을 지우고 다시 throw 한다** | 반환 전에 실패하면 cleanup 핸들이 없어 파일이 누적되는 문제 |
+| 13-9 | 만들어진 모든 DB를 모듈 수준 registry에 등록하고, `cleanup()`이 성공하면 registry에서 제거한다. `cleanupAllTestDbs()`는 남은 전부를 정리한다 | 테스트가 직접 만든 추가 DB의 누락, assertion 실패로 인한 누수 |
+| 13-10 | `cleanup()`은 `$disconnect()` 후 `.db`, `.db-wal`, `.db-shm` 세 파일을 지운다. 없으면 무시하고, 두 번 불려도 오류가 없다. 정리는 요구사항 13-B의 best-effort 계약을 따른다 | sidecar 파일 누적 |
+
+**13-A. 템플릿 생성 자식 명령과 실패 정리 (DR-12).**
+
+템플릿 생성은 아래 순서를 정확히 따른다. 각 단계의 실패는 모두 같은 정리 경로를 탄다.
+
+```
+0) forceTemplateRebuild가 아니고, 최종 템플릿과 meta가 있으며 지문이 일치하면 → 생성 생략
+1) tmpDb   = <root>/.tmp/test-template.<pid>-<랜덤>.db
+   tmpMeta = <root>/.tmp/test-template.<pid>-<랜덤>.meta.json
+2) 자식 프로세스로 마이그레이션 적용            ← 실패 시 3'
+3) beforeTemplateFinalizeHook?.()              ← 실패 시 3'  (테스트 전용 seam)
+4) fs.renameSync(tmpDb, <root>/.tmp/test-template.db)      ← 실패 시 3'
+5) tmpMeta에 { "fingerprint": "..." } 쓰기                  ← 실패 시 3'
+6) fs.renameSync(tmpMeta, <root>/.tmp/test-template.meta.json) ← 실패 시 3'
+
+3') 정리 대상(존재하지 않으면 무시):
+      tmpDb, tmpDb + "-wal", tmpDb + "-shm", tmpMeta
+    정리 후 원래 오류를 다시 throw 한다 (요구사항 13-B).
+    이미 rename된 최종 템플릿·meta는 건드리지 않는다.
+```
+
+**자식 명령은 아래로 고정한다.** 구현자가 고르지 않는다.
+
+| 항목 | 값 |
+|---|---|
+| 함수 | `node:child_process`의 `execFileSync` |
+| executable | `"npm"` |
+| arguments | `["run", "db:deploy"]` |
+| `cwd` | 저장소 루트 (13-1의 절대 경로) |
+| `env` | `{ ...process.env, DATABASE_URL: \`file:${tmpDb}\` }` — 기존 환경변수를 **전부 상속**한 뒤 `DATABASE_URL`만 덮어쓴다 |
+| `stdio` | `"pipe"`. 실패 시 stdout·stderr를 오류 메시지에 포함한다 |
+
+- **`npx prisma ...`를 직접 부르지 않는다** (요구사항 9, 금지 사항). `npm run db:deploy`를 거치면 D19의 기본값 주입 규칙과 CLI 호출 경로가 로컬·CI·헬퍼에서 하나로 유지된다.
+- `db:deploy` 스크립트는 `DATABASE_URL=${DATABASE_URL:-file:./dev.db}` 형태이므로, 위 `env`로 값을 주면 **기본값이 쓰이지 않고 임시 템플릿 경로가 쓰인다.** 이 조합이 성립하지 않으면(예: 개발 DB에 마이그레이션이 적용됨) 전제가 다른 것이므로 **멈추고 보고한다.**
+- 실행 대상 플랫폼은 macOS·Linux다. Windows(`npm.cmd`) 대응은 이 태스크의 범위가 아니다.
+
+**13-B. 실패 정리의 best-effort 계약과 오류 정책 (DR-12).**
+
+`createTestDb`의 실패 경로 정리(13-7, 13-8)와 `cleanup()`(13-10)은 **모두** 아래 계약을 따른다.
+
+1. **정리는 중간에 멈추지 않는다.** `$disconnect()`가 던지거나 개별 `unlink`가 실패해도 **나머지 대상의 정리를 계속 시도한다.** 첫 실패에서 빠져나오는 구현을 쓰지 않는다.
+2. 존재하지 않는 파일은 오류가 아니다 (`ENOENT`는 무시한다).
+3. 정리 중 발생한 오류는 **삼키지 않고 배열에 모은다.**
+4. **오류 우선순위 — 원래 작업 오류가 이긴다.**
+
+   | 상황 | 동작 |
+   |---|---|
+   | 원래 작업이 실패했고 정리도 실패 | **원래 오류를 그대로 다시 throw 한다.** 정리 오류는 각각 `console.warn`으로 대상 경로와 함께 남기고 throw 하지 않는다 |
+   | 원래 작업이 실패했고 정리는 성공 | 원래 오류를 그대로 다시 throw 한다 |
+   | 원래 작업은 성공했는데 정리만 실패 | 모아 둔 정리 오류로 `new AggregateError(cleanupErrors, "test db cleanup failed")`를 throw 한다 |
+   | 둘 다 성공 | 정상 반환 |
+
+   원래 오류를 감싸거나 교체하지 않는 이유는 **실패의 진짜 원인이 스택 트레이스에서 사라지면 안 되기 때문**이다. 정리 실패는 진단 정보이지 근본 원인이 아니다.
+5. `cleanup()`은 멱등이다. 두 번째 호출은 지울 것이 없으므로 오류 없이 끝난다 (경계 케이스 30).
 
 14. `createTestDb()`는 **시드를 실행하지 않는다.** 빈 DB가 기본값이며, 시드가 필요한 테스트가 직접 시드 함수를 부른다 (T04).
 
@@ -282,6 +404,8 @@ describe("테스트 DB 헬퍼", () => {
   it("만들어진 DB에 WAL이 적용된다", ...);
   it("cleanup이 db·wal·shm 세 파일을 모두 지운다", ...);
   it("생성 중 실패하면 부분 생성 파일을 남기지 않는다", ...);
+  it("템플릿 생성 중 실패하면 임시 템플릿 파일을 남기지 않는다", ...);
+  it("템플릿 생성 실패는 원래 오류를 그대로 전파한다", ...);
   it("지문은 내용이 바뀌면 달라진다", ...);
   it("지문은 파일 나열 순서에 무관하다", ...);
   it("템플릿 지문이 다르면 템플릿을 다시 만든다", ...);
@@ -332,18 +456,19 @@ describe("테스트 DB 헬퍼", () => {
 | 10 | `createdAt` | DATETIME | Y | |
 | 11 | `updatedAt` | DATETIME | Y | |
 
-**`ScheduleBlock`**:
+**`ScheduleBlock`** — **`date`가 인덱스 1에 있다. UR-16의 결과이며 초안의 8컬럼에서 9컬럼으로 늘었다:**
 
 | 순서 | 컬럼 | 타입 | notnull | 비고 |
 |---|---|---|---|---|
 | 0 | `id` | TEXT | Y | PK |
-| 1 | `startMinute` | INTEGER | Y | D10 |
-| 2 | `endMinute` | INTEGER | **N** | **F11 — NULL이 시점 마커를 의미한다** |
-| 3 | `label` | TEXT | Y | |
-| 4 | `kind` | TEXT | Y | 기본값 `STUDY` |
-| 5 | `matchType` | TEXT | **N** | F15 — NULL이 순수 루틴 블록 |
-| 6 | `createdAt` | DATETIME | Y | |
-| 7 | `updatedAt` | DATETIME | Y | |
+| 1 | `date` | TEXT | Y | **UR-16 — 이 시간표가 속한 날짜. `Assignment.date`와 같은 표기(D9)이므로 DATETIME이 아니다** |
+| 2 | `startMinute` | INTEGER | Y | D10 |
+| 3 | `endMinute` | INTEGER | **N** | **F11 — NULL이 시점 마커를 의미한다** |
+| 4 | `label` | TEXT | Y | |
+| 5 | `kind` | TEXT | Y | 기본값 `STUDY` |
+| 6 | `matchType` | TEXT | **N** | F15 — NULL이 순수 루틴 블록 |
+| 7 | `createdAt` | DATETIME | Y | |
+| 8 | `updatedAt` | DATETIME | Y | |
 
 **인덱스** — 이름, 유니크 여부, 컬럼 순서:
 
@@ -352,7 +477,9 @@ describe("테스트 DB 헬퍼", () => {
 | `Book_title_key` | Book | **예** | `title` |
 | `Assignment_date_status_idx` | Assignment | 아니오 | `date`, `status` |
 | `Assignment_bookId_date_idx` | Assignment | 아니오 | `bookId`, `date` |
-| `ScheduleBlock_startMinute_idx` | ScheduleBlock | 아니오 | `startMinute` |
+| `ScheduleBlock_date_startMinute_idx` | ScheduleBlock | 아니오 | **`date`, `startMinute`** |
+
+**`ScheduleBlock`의 인덱스가 바뀐 이유 (UR-16).** 초안은 `@@index([startMinute])`였다. 블록이 날짜를 가지면 주 질의가 "**이 날짜의** 시간표를 시간 순서로"(UR-16.2, UR-08)가 되므로 선두 컬럼이 `date`여야 한다. `startMinute` 단독 인덱스는 어떤 질의도 커버하지 않으므로 **남겨두지 않는다.** 인덱스 이름은 Prisma가 `<모델>_<컬럼들>_idx` 규칙으로 생성하므로 `ScheduleBlock_date_startMinute_idx`가 된다 — 관찰값이 다르면 요구사항 22의 구분에 따라 보고한다.
 
 **외래키:** `Assignment.bookId` → `Book.id` 1건. `ScheduleBlock`에는 외래키가 없다 (D11 — 조인 테이블 없는 파생 매칭).
 
@@ -396,6 +523,8 @@ describe("테스트 DB 헬퍼", () => {
 | `Assignment.date`는 `String` (D9) | `Assignment의 컬럼 이름·순서·nullable이 기대와 일치한다`가 실패 (타입 TEXT 기대) |
 | `startUnit`·`endUnit`·`title`·`bookId`는 nullable (D5, F4) | 같은 테스트가 실패 |
 | `endMinute`은 nullable (F11) | `ScheduleBlock의 컬럼 이름·순서·nullable이 기대와 일치한다`가 실패 |
+| **`ScheduleBlock.date`는 TEXT이고 notnull이다 (UR-16)** | 같은 테스트가 실패 |
+| **시간표 인덱스는 `(date, startMinute)`다 (UR-16.2)** | `인덱스 이름·유니크 여부·컬럼 순서가 기대와 일치한다`가 실패 |
 | `orderIndex`에 유니크 제약을 걸지 않는다 (D15-b) | `인덱스 이름·유니크 여부·컬럼 순서가 기대와 일치한다`가 실패 |
 | 진도 체인·목록 질의용 인덱스 2개 (D5, D7) | 같은 테스트가 실패 |
 | 연결 문자열은 `.env`가 아니라 코드·스크립트 기본값 (D19) | `.env`를 만들면 CLAUDE.md 위반. `env -u DATABASE_URL` 완료 조건이 실패 |
@@ -404,6 +533,9 @@ describe("테스트 DB 헬퍼", () => {
 | 스키마와 마이그레이션이 일치한다 | `npm run db:diff`가 종료 코드 2 (drift 감지) |
 | WAL 적용 (D16-e) | `npm run db:wal` 종료 코드 1 |
 | 테스트 DB는 생성 실패 시에도 파일을 남기지 않는다 (DR-12) | `생성 중 실패하면 부분 생성 파일을 남기지 않는다`가 실패 |
+| 템플릿 생성은 어느 단계에서 실패해도 임시 파일을 남기지 않는다 (DR-12) | `템플릿 생성 중 실패하면 임시 템플릿 파일을 남기지 않는다`가 실패 |
+| 실패 정리는 원래 오류를 가리지 않는다 (DR-12, 13-B) | `템플릿 생성 실패는 원래 오류를 그대로 전파한다`가 실패 |
+| 템플릿 생성 자식 명령은 `npm run db:deploy`다 (DR-12, 13-A) | `npx prisma`를 직접 부르면 요구사항 9와 금지 사항 위반. 완료 조건의 `env -u DATABASE_URL` 검증과도 경로가 갈라진다 |
 
 ## 테스트 케이스
 
@@ -427,24 +559,30 @@ describe("테스트 DB 헬퍼", () => {
 | 14 | `서로 격리된 DB를 만든다` | 같은 파일 | `createTestDb()` 2회, 한쪽에만 Book 1건 생성 | 다른 쪽의 Book 수가 0, 두 `filePath`가 다름 |
 | 15 | `만들어진 DB에 WAL이 적용된다` | 같은 파일 | `getJournalMode` | `"wal"` |
 | 16 | `cleanup이 db·wal·shm 세 파일을 모두 지운다` | 같은 파일 | `cleanup()` 후 파일 확인 | 세 경로 모두 부재 |
+| 16b | `템플릿 생성 중 실패하면 임시 템플릿 파일을 남기지 않는다` | 같은 파일 | `createTestDb({ forceTemplateRebuild: true, beforeTemplateFinalizeHook: () => { throw new Error("template boom"); } })` | 호출이 reject되고, `.tmp/`에 `test-template.<pid>-*` 패턴의 `.db`·`-wal`·`-shm`·`.meta.json`이 **0건**이다. 최종 `test-template.db`/`.meta.json`은 호출 전 상태 그대로다 (13-A) |
+| 16c | `템플릿 생성 실패는 원래 오류를 그대로 전파한다` | 같은 파일 | 16b와 같은 호출 | reject된 오류가 `beforeTemplateFinalizeHook`이 던진 그 오류이며 message가 `"template boom"`이다. 정리 오류로 감싸이거나 교체되지 않는다 (13-B의 4) |
 | 17 | `지문은 내용이 바뀌면 달라진다` | 같은 파일 | 임시 디렉터리에 가짜 `migration.sql` 2종 | 두 지문이 다르다 |
 | 18 | `지문은 파일 나열 순서에 무관하다` | 같은 파일 | 같은 내용, 생성 순서만 다른 임시 디렉터리 2개 | 두 지문이 같다 |
 | 19 | `템플릿 지문이 다르면 템플릿을 다시 만든다` | 같은 파일 | `.tmp/test-template.meta.json`에 잘못된 지문을 쓴 뒤 `createTestDb()` | meta의 지문이 `computeMigrationsFingerprint(prisma/migrations)` 값으로 갱신됨 |
 
 17·18·19번은 **실제 `prisma/migrations` 파일을 건드리지 않는다.** 지문 함수에 임시 디렉터리를 넘기고, 19번은 meta 파일만 조작한다. 마이그레이션 파일 수정 금지(CLAUDE.md)를 지키면서 지문 로직을 검증하는 방법이다.
 
+**16b·16c가 `forceTemplateRebuild`를 쓰는 이유 (DR-12).** 앞선 테스트가 이미 유효한 템플릿을 만들어 두면 생성 경로가 통째로 생략되어 `beforeTemplateFinalizeHook`이 호출되지 않는다. 그러면 이 두 테스트는 **조용히 아무것도 검증하지 않는 상태**가 된다. `forceTemplateRebuild: true`가 생성 경로 진입을 결정적으로 만든다. 두 테스트는 최종 템플릿을 남기지 않으므로(실패로 끝난다) 뒤따르는 테스트의 템플릿 캐시를 깨지 않는다 — 그것도 16b가 함께 단정하는 내용이다.
+
 ### 규칙 위반 케이스
 
 | # | 케이스명 | 입력 | 기대 결과 |
 |---|---|---|---|
 | 20 | 구조 단정이 살아 있는가 | 테스트 파일의 기대 구조 상수에서 `Assignment.startUnit`의 notnull 기대를 `Y`로 임시 변경 | 케이스 8이 실패. **확인 후 되돌린다** |
+| 20b | 시간표 날짜 컬럼이 실제로 검증되는가 (UR-16) | `schema.prisma`의 `ScheduleBlock`에서 `date String` 줄을 임시 제거하고 `npm run db:diff` | `db:diff`가 종료 코드 2(drift). **마이그레이션을 새로 만들지 않고 즉시 되돌린다** |
 | 21 | 스키마 변경이 감지되는가 | `schema.prisma`의 `startUnit Int?`를 `startUnit Int`로 임시 변경하고 `npm run db:validate && npm run db:diff` | `db:diff`가 종료 코드 2(drift). **마이그레이션을 새로 만들지 않고 즉시 되돌린다** |
 | 22 | 기본값이 갈라지면 잡히는가 | `package.json`의 `db:wal` 기본값을 `file:./other.db`로 임시 변경 | 케이스 4가 실패. **확인 후 되돌린다** |
 | 23 | 스크립트 집합 변화가 잡히는가 | `db:wal`에서 `DATABASE_URL=${DATABASE_URL:-file:./dev.db} ` 접두를 임시 제거 | 케이스 3이 실패. **확인 후 되돌린다** |
-| 24 | 생성 실패 시 정리되는가 | `createTestDb({ afterCopyHook: () => { throw new Error("boom"); } })` | throw 되고 `.tmp/`에 해당 `.db`/`-wal`/`-shm`이 남지 않는다 (케이스 `생성 중 실패하면 부분 생성 파일을 남기지 않는다`) |
+| 24 | 복사 이후 생성 실패 시 정리되는가 | `createTestDb({ afterCopyHook: () => { throw new Error("boom"); } })` | throw 되고 `.tmp/`에 해당 `.db`/`-wal`/`-shm`이 남지 않는다 (케이스 `생성 중 실패하면 부분 생성 파일을 남기지 않는다`) |
+| 24b | 템플릿 생성 실패 시 정리되는가 | `createTestDb({ forceTemplateRebuild: true, beforeTemplateFinalizeHook: () => { throw new Error("template boom"); } })` | throw 되고 임시 템플릿 4종이 남지 않는다 (케이스 16b·16c). **13-A의 정리 목록에서 `-wal` 한 줄을 임시로 지우면 16b가 실패해야 한다 — 확인 후 되돌린다** |
 | 25 | enum 지원 확인 | `npm run db:validate` | 통과. 실패하면 **중단 후 보고** (D13 전제 붕괴) |
 
-20~23번은 검증이 실제로 작동하는지 확인하는 절차다. **네 명령의 실제 출력을 완료 보고에 포함하고, 코드는 원상 복구된 상태여야 한다.** 21번은 특히 마이그레이션을 재생성하지 않도록 주의한다.
+20~23·20b·24b번은 검증이 실제로 작동하는지 확인하는 절차다. **여섯 명령의 실제 출력을 완료 보고에 포함하고, 코드는 원상 복구된 상태여야 한다.** 21·20b번은 특히 마이그레이션을 재생성하지 않도록 주의한다.
 
 ### 경계 케이스
 
@@ -471,21 +609,25 @@ env -u DATABASE_URL npm run db:wal                  → "journal_mode=wal", 종�
 env -u DATABASE_URL npm run db:wal                  → 2회째도 종료 코드 0 (멱등)
 npm run typecheck                                   → 에러 0
 npm run lint                                        → 에러 0
-npm test -- --reporter=verbose                      → 실패 0건. 정상 케이스 1~19의
-                                                      테스트명이 모두 출력에 나타난다
+npm test -- --reporter=verbose                      → 실패 0건. 정상 케이스 1~19
+                                                      (16b·16c 포함)의 테스트명이
+                                                      모두 출력에 나타난다
 npm run build                                       → 성공
 npm run e2e                                         → 실패 0건
 ```
 
 **누적 테스트 개수를 완료 조건으로 쓰지 않는다.** 이 스펙에 명명된 테스트 이름이 `--reporter=verbose` 출력에 모두 나타나는 것으로 판정한다.
 
-완료 보고에 `prisma --version`, `db:validate`, `db:diff`, `db:wal`, `npm test`, 그리고 위반 케이스 20~23의 **실제 출력**을 포함한다.
+완료 보고에 `prisma --version`, `db:validate`, `db:diff`, `db:wal`, `npm test`, 그리고 위반 케이스 20~23·20b·24b의 **실제 출력**을 포함한다. 위반 케이스 실행이 끝난 뒤 `ls -la .tmp/`의 출력도 함께 내어 **임시 템플릿 잔여물이 없음**을 보인다 (DR-12).
 
 ## 금지 사항
 
 - `.env`, `.env.local`, `prisma/.env`를 만들지 않는다. **어떤 경우에도** (CLAUDE.md, D19).
 - 생성된 `migration.sql`을 수정하지 않는다. 위반 케이스 21에서 스키마를 임시 변경한 뒤 **마이그레이션을 재생성하지 않고** 되돌린다.
-- 로컬·CI 어디서도 `npx prisma generate|validate|migrate`를 직접 부르지 않는다. npm 스크립트를 쓴다 (DR-06).
+- 로컬·CI 어디서도 `npx prisma generate|validate|migrate|migrate deploy`를 직접 부르지 않는다. npm 스크립트를 쓴다 (DR-06). **`tests/helpers/db.ts`의 자식 프로세스도 예외가 아니다 — `npm run db:deploy`를 쓴다** (13-A, DR-12).
+- 실패 정리를 첫 오류에서 중단하도록 구현하지 않는다. `$disconnect()`나 개별 `unlink`가 실패해도 나머지를 계속 정리한다 (13-B).
+- 정리 오류로 원래 오류를 감싸거나 교체하지 않는다 (13-B의 4).
+- `afterCopyHook`·`beforeTemplateFinalizeHook`·`forceTemplateRebuild`는 **`tests/helpers/db.ts`에만 존재한다.** `src/` 아래 어떤 파일에도 두지 않고, Route Handler·서비스 계층·운영 API의 요청 경로에 노출하지 않는다.
 - `EXPECTED_DB_URL_SCRIPTS`를 "N개 이상" 같은 하한 비교로 바꾸지 않는다.
 - `prisma/seed.ts`를 만들지 않는다 (T04).
 - `src/domain/` 아래에 파일을 만들지 않는다 (T05). 특히 enum 재수출 파일을 미리 만들지 않는다.
@@ -505,10 +647,15 @@ npm run e2e                                         → 실패 0건
 | 4 | `datasourceUrl` vs `datasources` | `datasourceUrl`(문자열 1개). Prisma 6에서 권장되는 형태이고 중첩 객체보다 단순하다 |
 | 5 | 구조 검증을 T03에 두는 이유 | T04로 미루면 T03이 눈검사로 완료된다. 파일 수 초과를 감수하고 자기 검증을 택했다 (DR-07) |
 | 6 | 테스트 DB 헬퍼를 T03에 두는 이유 | 구조 검증이 마이그레이션된 임시 DB를 필요로 하므로 같은 태스크에 있어야 한다. T04는 이 헬퍼를 **사용만** 한다 |
-| 7 | `afterCopyHook` 테스트 seam | 실패 경로 정리를 결정적으로 검증할 다른 방법이 없다. 프로덕션 경로는 이 옵션을 넘기지 않으며, 헬퍼는 테스트 전용 파일(`tests/`)이다 |
+| 7 | 테스트 seam 3종 (`afterCopyHook`, `beforeTemplateFinalizeHook`, `forceTemplateRebuild`) | 실패 경로 정리를 결정적으로 검증할 다른 방법이 없다 (DR-12). 세 옵션 모두 **`tests/helpers/db.ts` 안에만 존재하며** `src/` 아래에 두지 않는다. 프로덕션 코드는 이 헬퍼를 import 하지 않으므로 제품 요청 경로·운영 API에 노출되지 않는다. T04의 `beforeCreateHook`도 같은 원칙을 따른다 |
+| 7b | 템플릿 생성 자식 명령 | **`execFileSync("npm", ["run", "db:deploy"], { cwd: <저장소 루트>, env: { ...process.env, DATABASE_URL }, stdio: "pipe" })`로 고정** (13-A). `npx prisma migrate deploy` 직접 호출을 쓰지 않는 이유는 D19의 기본값 주입 경로를 헬퍼·로컬·CI가 공유해야 하기 때문이다 |
+| 7c | 정리 실패 시의 오류 정책 | **원래 작업 오류 우선.** 정리 오류는 `console.warn`으로 남기고, 원래 작업이 성공했을 때만 `AggregateError`로 throw 한다 (13-B의 4) |
 | 8 | 기본값 DDL 문자열 검증 범위 | `orderIndex`와 `status`만. 그 외는 "기본값 존재" 수준 (요구사항 21) |
-| 9 | enum의 DB 레벨 강제 | 없다. Prisma 계층 강제이며 `CHECK` 제약을 기대하지 않는다 (요구사항 3). 값 검증은 T07의 Zod가 담당한다 |
+| 9 | enum의 DB 레벨 강제 | **없다** (DR-07). DB와 migration은 값 범위를 강제하지 않고, 컬럼은 `TEXT`이며 `CHECK` 제약이 없다. 강제는 Prisma ORM/Client 계층에서만 일어나고, 우회 쓰기로 들어간 invalid 값은 조회 시 런타임 오류가 될 수 있다. 외부 입력 검증은 **T07의 Zod**가 담당한다. 전체 표는 요구사항 3에 있으며 `architecture.md` §1.5, `decisions.md` D13과 같은 내용이어야 한다 |
 | 10 | `db:diff`의 shadow DB | `file:./.tmp-shadow.db` (schema 기준 → `prisma/.tmp-shadow.db`). `.gitignore`에 추가한다 |
 | 11 | 커넥션 풀·타임아웃 | 설정하지 않는다. 기기 2~3대 규모(D16)에서 기본값으로 충분하다 |
 | 12 | 마이그레이션 이름 | `init` 하나. 이 태스크에서 스키마 전체가 한 번에 들어간다 |
 | 13 | 시드 데이터 | 이 태스크에서 넣지 않는다. `db:setup`은 T04에서 `db:seed`를 이어붙인다 |
+| 14 | `ScheduleBlock.date`의 타입 | **`String("YYYY-MM-DD")`** (UR-16). `Assignment.date`와 같다 — 달력 날짜에 시각 정밀도를 만들지 않는다 (D9). `DateTime`으로 바꾸지 않는다 |
+| 15 | 시간표 인덱스 | **`@@index([date, startMinute])` 하나.** `startMinute` 단독 인덱스를 남기지 않는다 — 어떤 질의도 커버하지 않는다 (UR-16.2) |
+| 16 | `db:setup`의 성격 | **파일럿·개발 초기화 명령**이다 (UR-24.3). 프로덕션 기동·배포 절차에 넣지 않는다. 일반 배포용 초기화와의 분리는 후속 범위다 (요구사항 7-A) |

@@ -4,6 +4,24 @@
 
 `architecture.md` 부록 C의 시드(책 9권 · 시간표 블록 10건 · 과제 27건)를 **기존 사용자 데이터를 훼손하지 않고** 넣고, 표 전체가 정확히 재현되는지 exact match로 검증한다.
 
+## 요구사항 추적
+
+| 근거 | 내용 |
+|---|---|
+| MR-01 ~ MR-12 | 과제 27건과 책 9권의 **값 전체**가 `plan-20days.jpg`의 직접 관찰에서 온다 |
+| MR-20 ~ MR-29 | 블록 10건의 값 전체가 `daily-schedule.jpg`의 직접 관찰에서 온다 |
+| MR-12, NR-02, **UR-24.6** | `7/29`의 판독 불가 항목을 시드하지 않는다. 어떤 이름으로도 채우지 않는다 |
+| OR-03 | fixture 중복 전사 + exact match + mutation 확인 |
+| **UR-24, UR-24.1** | **이 태스크의 존재 이유.** 사진의 숙제 데이터를 **파일럿·개발·테스트용 초기 시드**로 제공한다 |
+| **UR-24.5** | **9 / 10 / 27 데이터 검증을 유지한다** — 이 수가 요구사항으로 고정되어 있다 |
+| **UR-24.2, UR-24.3** | `db:setup`은 **파일럿·개발 초기화 명령**이다. 일반 운영 배포에서 사용자 확인 없이 개인 숙제 데이터가 주입되어서는 안 된다 |
+| **UR-15.1, UR-15.3** | 과제 27건의 `date`. **연도 `2026`은 mockup에서 읽은 값이 아니라 사용자가 이번 파일럿에 지정한 값이다** (MR-02에는 월·일만 있다) |
+| **UR-16** | **블록 10건이 `date`를 갖는다.** 요구사항 9 참조 |
+| **UR-26, UR-26.1~26.6** | 그 `date` 값이 `2026-07-29`인 것. **사용자가 파일럿 기간 첫날을 대표 일일 시간표 날짜로 지정했다** (2026-08-01 `OPEN-01` 결정) |
+| UR-17 | 모든 과제를 `status = PLANNED`, `completedAt = null`로 시드하는 것 |
+
+**설계 가정 12건(AP-01~AP-12)은 2026-08-01에 전부 처리되었다.** 이 태스크에 영향을 준 것은 **AP-11 조건부 승인**(파일럿 한정)과 **AP-03 거절**(블록에 날짜가 생김)이다.
+
 ## 선행 태스크
 
 T03
@@ -32,9 +50,15 @@ T03은 T02를, T02는 T01을 선행으로 갖는다. 따라서 T04는 **T01·T02
 수정:
 
 - `package.json`
-- `src/server/prisma.test.ts`
+- `src/server/prisma.test.ts` — **T03 소유 파일에 대한 의도된 소유권 예외** (아래 참조)
 
-**이 목록 밖의 파일은 생성·수정하지 않는다.** 새 의존성을 추가하지 않으므로 `package-lock.json`은 바뀌지 않는다. `tests/helpers/db.ts`는 **사용만 하고 수정하지 않는다** (T03 소관).
+5개 파일이다. **이 목록 밖의 파일은 생성·수정하지 않는다.** 새 의존성을 추가하지 않으므로 `package-lock.json`은 바뀌지 않는다.
+
+**소유권 예외 — `src/server/prisma.test.ts` (RR-03).** 이 파일은 T03이 만들고 소유한다. T04가 수정하는 것은 **의도된 예외**이며 근거는 다음과 같다.
+
+- T04가 `package.json`의 `db:*` 스크립트를 바꾸므로(`db:seed` 추가, `db:setup` 확장), **그 스크립트 문자열을 검증하는 테스트도 같은 커밋에서 함께 움직여야 한다.** 갈라지면 T03의 exact match 테스트가 실패하는데, 그것이 그 테스트의 설계 목적이다 (T03 요구사항 17).
+- 허용 범위는 **요구사항 19·20에 적힌 정확한 변경 두 가지뿐이다.** `EXPECTED_DB_URL_SCRIPTS` 배열에 `"db:seed"` 추가, 그리고 `db:setup` 구성 검증 테스트 추가. 그 밖의 기존 테스트를 고치거나 지우지 않는다.
+- **역방향은 허용하지 않는다.** `tests/helpers/db.ts`는 **사용만 하고 수정하지 않는다** (T03 소관). T04가 헬퍼의 동작이 바뀌어야 한다고 판단하면 고치지 말고 **멈추고 보고한다.**
 
 ## 구현 요구사항
 
@@ -116,18 +140,30 @@ seeded books=9 blocks=10 assignments=27 (skipped: blocks=false assignments=false
 
 9. **시간표 블록(`ScheduleBlock`) 10건.** D11의 표 그대로다. `label`의 가운뎃점은 `·`(U+00B7)이고 앰퍼샌드 앞뒤에 공백이 있다.
 
-| # | startMinute | endMinute | label | kind | matchType |
-|---|---|---|---|---|---|
-| 1 | 450 | `null` | `기상` | `MARKER` | `null` |
-| 2 | 480 | `null` | `아침식사 끝내기` | `MARKER` | `null` |
-| 3 | 480 | 600 | `원리셈 · 플라토 · 따플 · 디딤돌` | `STUDY` | `null` |
-| 4 | 600 | 660 | `영어책 읽기` | `STUDY` | `ENGLISH_READING` |
-| 5 | 660 | 690 | `일기쓰기` | `STUDY` | `DIARY` |
-| 6 | 690 | 750 | `점심 & 자유시간` | `MEAL` | `null` |
-| 7 | 750 | 765 | `뿌리깊은 국어` | `STUDY` | `null` |
-| 8 | 765 | 840 | `영어책 읽기` | `STUDY` | `ENGLISH_READING` |
-| 9 | 840 | 900 | `한글책 읽기` | `STUDY` | `KOREAN_READING` |
-| 10 | 900 | 1020 | `영어숙제 끝내기` | `STUDY` | `WORKSHEET` |
+   **10건 전부 `date = "2026-07-29"`다** (UR-16, UR-26.1). 블록은 이제 날짜에 속한다.
+
+| # | date | startMinute | endMinute | label | kind | matchType |
+|---|---|---|---|---|---|---|
+| 1 | `2026-07-29` | 450 | `null` | `기상` | `MARKER` | `null` |
+| 2 | `2026-07-29` | 480 | `null` | `아침식사 끝내기` | `MARKER` | `null` |
+| 3 | `2026-07-29` | 480 | 600 | `원리셈 · 플라토 · 따플 · 디딤돌` | `STUDY` | `null` |
+| 4 | `2026-07-29` | 600 | 660 | `영어책 읽기` | `STUDY` | `ENGLISH_READING` |
+| 5 | `2026-07-29` | 660 | 690 | `일기쓰기` | `STUDY` | `DIARY` |
+| 6 | `2026-07-29` | 690 | 750 | `점심 & 자유시간` | `MEAL` | `null` |
+| 7 | `2026-07-29` | 750 | 765 | `뿌리깊은 국어` | `STUDY` | `null` |
+| 8 | `2026-07-29` | 765 | 840 | `영어책 읽기` | `STUDY` | `ENGLISH_READING` |
+| 9 | `2026-07-29` | 840 | 900 | `한글책 읽기` | `STUDY` | `KOREAN_READING` |
+| 10 | `2026-07-29` | 900 | 1020 | `영어숙제 끝내기` | `STUDY` | `WORKSHEET` |
+
+**9-A. 블록의 날짜에 대하여 (UR-16, UR-26) — 읽고 넘어갈 것.**
+
+- `daily-schedule.jpg`에는 **날짜가 적혀 있지 않다** (MR-20). 그럼에도 블록이 날짜를 갖는 이유는 사용자 요구가 "**특정 하루**의 계획표"이고(UR-07), "날짜 없이 매일 반복" 모델이 2026-08-01에 **명시적으로 거절**되었기 때문이다 (UR-16).
+- **왜 하루분 10건인가:** UR-24.5가 블록 수를 **10건**으로 고정한다. 파일럿 기간 20일 전체에 넣으면 200건이 되어 그 조건과 충돌한다.
+- **왜 `2026-07-29`인가:** **사용자가 지정했다** (UR-26, 2026-08-01). 파일럿 기간의 첫 날짜를 **대표 일일 시간표 날짜**로 정한 것이다. **이미지에서 판독한 날짜가 아니다** — `2026`이라는 연도에 대한 UR-15.3과 같은 성질이며, 완료 보고에서 "사진에서 읽었다"고 쓰지 않는다.
+- **`2026-07-29`는 제품 전체에 하드코딩되는 불변값이 아니다** (UR-26.6). 파일럿 시드용 값이다. `prisma/seed.ts`의 시드 표 밖에서 이 문자열을 참조하는 로직을 만들지 않는다.
+- **다른 19일에 시간표를 자동 복제하지 않는다** (UR-26.2). 20일치를 만들어 넣는 구현은 UR-24.5(10건)와도 충돌한다.
+- **결과: 시드 직후 `2026-07-29` 외의 19일은 시간표가 비어 있다. 이것은 의도된 동작이다** (UR-26.2, UR-26.4). 결함이 아니며 **완료 보고에서 실패로 보고하지 않는다.** 시간표 템플릿·반복은 MVP 밖이므로(UR-26.3, NR-03) 사용자가 날짜별로 입력한다 (UR-26.5). 화면은 그 상태를 "이 날짜의 시간표가 없음"으로 표시한다 (UR-26.4, `architecture.md` §6.2-2 — 담당은 후속 화면 태스크다).
+- 이 날짜를 바꾸라는 지시를 받으면 **요구사항 9의 표와 fixture의 값만** 바꾼다. 다른 로직은 날짜 값에 의존하지 않아야 한다.
 
 10. **과제(`Assignment`) 27건.** §0.1의 실물 계획표에서 판독 가능한 항목 전부다. **모든 행의 `startUnit`은 `null`, `status`는 `PLANNED`, `completedAt`은 `null`이다.**
 
@@ -186,6 +222,7 @@ export interface ExpectedBook {
 }
 
 export interface ExpectedBlock {
+  date: string;              // UR-16 — 블록이 속한 날짜. 10건 전부 "2026-07-29" (UR-26.1)
   startMinute: number;
   endMinute: number | null;
   label: string;
@@ -215,7 +252,7 @@ export const EXPECTED_ASSIGNMENTS: readonly ExpectedAssignment[] = [ /* 27건 */
 | 배열 | 정렬 키 |
 |---|---|
 | `EXPECTED_BOOKS` | `title` 오름차순 |
-| `EXPECTED_BLOCKS` | `startMinute` → `endMinute ?? -1` → `label` 오름차순 |
+| `EXPECTED_BLOCKS` | **`date`** → `startMinute` → `endMinute ?? -1` → `label` 오름차순 (UR-16) |
 | `EXPECTED_ASSIGNMENTS` | `date` → `orderIndex` 오름차순 |
 
 16. **문자열 정렬은 비교 연산자(코드 유닛 순서)로 한다. `localeCompare`를 쓰지 않는다** — ICU 버전과 로케일에 따라 한글·숫자 혼합 정렬 결과가 달라져 테스트가 환경에 의존하게 된다. 코드 유닛 순서에서 `EXPECTED_BOOKS`의 순서는 아래와 같다.
@@ -227,13 +264,17 @@ Kid Spy, wimpy kid, 김방구 3, 무지개 물고기, 엄마 5분만
 
 (숫자 < 대문자 < 소문자 < 한글 순이므로 `wimpy kid`가 `Kid Spy` 뒤, 한글 앞에 온다.)
 
-17. `EXPECTED_BLOCKS`의 정렬 결과는 요구사항 9의 표 순서와 같다. 480분에 두 건이 있으나 `endMinute ?? -1`이 `아침식사 끝내기`(-1)를 `원리셈 · 플라토 · 따플 · 디딤돌`(600)보다 앞에 둔다.
+17. `EXPECTED_BLOCKS`의 정렬 결과는 요구사항 9의 표 순서와 같다. 10건의 `date`가 전부 같으므로 첫 정렬 키는 동점이고, 480분에 두 건이 있으나 `endMinute ?? -1`이 `아침식사 끝내기`(-1)를 `원리셈 · 플라토 · 따플 · 디딤돌`(600)보다 앞에 둔다. **`date`를 첫 키로 두는 이유는 시드가 한 날짜분이라서가 아니라, 여러 날짜가 생겼을 때도 같은 규칙이 성립해야 하기 때문이다** (UR-16).
 
 ### D. 설정 변경
 
 18. `package.json`:
     - `scripts`에 `"db:seed": "DATABASE_URL=${DATABASE_URL:-file:./dev.db} tsx prisma/seed.ts"` 추가
-    - 기존 `db:setup`을 `"npm run db:deploy && npm run db:wal && npm run db:seed"`로 수정
+    - 기존 `db:setup`을 아래 문자열로 **정확히** 수정한다.
+
+```
+npm run db:deploy && npm run db:wal && npm run db:seed
+```
 
 19. `src/server/prisma.test.ts`의 `EXPECTED_DB_URL_SCRIPTS`에 `"db:seed"`를 추가해 정렬을 유지한다 (T03 요구사항 17). 갱신하지 않으면 T03의 exact match 테스트가 실패한다 — 그것이 그 테스트의 목적이다.
 
@@ -249,6 +290,19 @@ const EXPECTED_DB_URL_SCRIPTS = [
 ] as const;
 ```
 
+20. **`db:setup`의 구성과 순서를 자동으로 검사한다 (RR-03).** `src/server/prisma.test.ts`의 `describe("D19 기본값 일관성")` 안에 아래 테스트를 **추가**한다. 기존 테스트는 고치지 않는다.
+
+```ts
+const EXPECTED_DB_SETUP = "npm run db:deploy && npm run db:wal && npm run db:seed";
+
+it("db:setup이 db:deploy → db:wal → db:seed 순서로 조합된다", ...);
+```
+
+    - `package.json`을 읽어 `scripts["db:setup"]`을 `EXPECTED_DB_SETUP`과 **문자열 exact match**로 비교한다.
+    - 부분 문자열 포함(`includes`), 정규식 느슨한 매칭, 하위 명령 집합 비교를 쓰지 않는다. **순서가 검증 대상이므로 exact match여야 한다.**
+    - 이 테스트가 필요한 이유: 기존 `기본값 리터럴을 갖는 스크립트 집합이 기대와 정확히 일치한다`는 **`DATABASE_URL=` 리터럴을 갖는 스크립트의 이름 집합**만 본다. `db:setup`은 리터럴이 없으므로 그 검사의 대상이 아니고, 따라서 `db:seed`를 빼먹거나 순서를 바꿔도 그 테스트는 초록이다. RR-03이 지적한 구멍이 정확히 이 지점이다.
+    - `db:setup`에 `DATABASE_URL=` 리터럴이 없다는 기존 테스트(`db:setup은 기본값 리터럴을 갖지 않는다`)는 그대로 유지한다. 두 테스트는 서로 다른 것을 본다.
+
 ## 비즈니스 규칙
 
 **테스트는 번호가 아니라 이름으로 참조한다** (DR-13).
@@ -260,16 +314,21 @@ const EXPECTED_DB_URL_SCRIPTS = [
 | `startUnit`은 전부 `null` (D5) | `모든 과제의 startUnit이 null이고 status가 PLANNED다` |
 | 읽기 유형 ⟺ `bookId != null` (I1), 비읽기는 진도 필드 없음 (I2) | `읽기 과제와 비읽기 과제의 필드 조건이 I1·I2를 만족한다` |
 | `endMinute == null` ⟺ `kind == MARKER` (I8) | `마커 블록 2건만 endMinute이 null이고 kind가 MARKER다` |
-| 범위 블록끼리 겹치지 않는다 (I9, D15) | `범위 블록끼리 시간이 겹치지 않는다` |
+| **같은 날짜 안에서** 범위 블록끼리 겹치지 않는다 (I9, D15, UR-16) | `같은 날짜의 범위 블록끼리 시간이 겹치지 않는다` |
+| 블록은 날짜에 속한다 (UR-16) | `모든 블록이 같은 날짜에 속한다` / `ScheduleBlock 10건이 기대 fixture와 정확히 일치한다` |
 | 판독 불가 항목을 추측해 채우지 않는다 (부록 C.2-1) | `2026-07-29에는 과제가 2건이고 한글책 과제가 없다` / `판독 불가 항목을 임의로 채우지 않는다` |
 | 기본 시드는 기존 데이터를 덮어쓰거나 지우지 않는다 (DR-10) | `기존 과제가 있으면 다시 만들지 않는다` / `기본 시드는 기존 Book의 사용자 필드를 보존한다` / `기본 시드는 기존 블록과 과제를 보존한다` |
 | force 중 실패하면 전부 롤백된다 (DR-10) | `force 중 실패하면 삭제가 롤백된다` |
 | force는 Book을 지우지 않는다 (DR-10) | `force는 Book을 삭제하지 않는다` |
 | `김방구 3`의 `3`을 챕터로 파싱하지 않는다 | `김방구 3의 제목이 그대로 저장되고 진도가 파싱되지 않는다` |
+| `db:setup`은 `db:deploy → db:wal → db:seed` 순서로 조합된다 (RR-03) | `db:setup이 db:deploy → db:wal → db:seed 순서로 조합된다` |
+| 개발 DB(`prisma/dev.db`와 `-wal`·`-shm`)는 완료 검증으로 변하지 않는다 (DR-11) | 완료 조건 2의 불변 검사가 종료 코드 `2`로 실패 |
 
 ## 테스트 케이스
 
-전부 `tests/integration/seed.test.ts`에 작성한다. `beforeEach`에서 `createTestDb()`, `afterEach`에서 `cleanup()`, `afterAll`에서 `cleanupAllTestDbs()`를 부른다 (T03 헬퍼).
+**케이스 1~29는 `tests/integration/seed.test.ts`에, 케이스 30~32는 `src/server/prisma.test.ts`에 작성한다.** 후자는 DB에 붙지 않는 `package.json` 텍스트 검사이며, T03이 만든 파일에 대한 의도된 소유권 예외다 (RR-03 — "변경 대상 파일" 참조).
+
+`tests/integration/seed.test.ts`는 `beforeEach`에서 `createTestDb()`, `afterEach`에서 `cleanup()`, `afterAll`에서 `cleanupAllTestDbs()`를 부른다 (T03 헬퍼).
 
 ### 정상 케이스 — exact match (DR-09의 핵심)
 
@@ -291,7 +350,8 @@ const EXPECTED_DB_URL_SCRIPTS = [
 | 7 | `모든 과제의 startUnit이 null이고 status가 PLANNED다` | 시드 후 조회 | `startUnit != null` 0건, `status != "PLANNED"` 0건 |
 | 8 | `읽기 과제와 비읽기 과제의 필드 조건이 I1·I2를 만족한다` | 시드 후 조회 | 읽기는 `bookId != null && title == null`, 비읽기는 `bookId == null && title != null && startUnit == null && endUnit == null` |
 | 9 | `마커 블록 2건만 endMinute이 null이고 kind가 MARKER다` | 시드 후 조회 | `endMinute == null` 2건, 그 2건의 `kind`가 `MARKER`, 나머지 8건은 `endMinute != null && kind != "MARKER"` |
-| 10 | `범위 블록끼리 시간이 겹치지 않는다` | 시드 후 조회 | `endMinute != null`을 `startMinute` 오름차순 정렬 시 모든 인접 쌍이 `prev.endMinute <= next.startMinute` |
+| 10 | `같은 날짜의 범위 블록끼리 시간이 겹치지 않는다` | 시드 후 조회 | **`date`로 묶은 뒤** 각 그룹 안에서 `endMinute != null`을 `startMinute` 오름차순 정렬 시 모든 인접 쌍이 `prev.endMinute <= next.startMinute` (I9, UR-16). **다른 날짜끼리는 비교하지 않는다** |
+| 10b | `모든 블록이 같은 날짜에 속한다` | 시드 후 조회 | 10건의 `date`가 전부 `"2026-07-29"` (요구사항 9, UR-26.1). **다른 날짜의 블록은 0건** — 자동 복제 금지(UR-26.2)를 함께 고정한다 |
 | 11 | `matchType이 지정된 블록은 5건이다` | 시드 후 조회 | `ENGLISH_READING` 2건, `DIARY` 1건, `KOREAN_READING` 1건, `WORKSHEET` 1건 |
 | 12 | `김방구 3의 제목이 그대로 저장되고 진도가 파싱되지 않는다` | 시드 후 조회 | `title === "김방구 3"`, `language === "KO"`, 그 책의 과제 1건의 `endUnit === null` |
 | 13 | `2026-07-29에는 과제가 2건이고 한글책 과제가 없다` | 시드 후 조회 | 2건, `type` 집합이 `{ENGLISH_READING, DIARY}`, `orderIndex`가 `[0, 1]` |
@@ -301,7 +361,7 @@ const EXPECTED_DB_URL_SCRIPTS = [
 
 아래 테스트들은 **사용자 데이터 fixture를 먼저 만든 뒤** 시드를 돌린다. fixture는 시드 표에 없는 값이어야 한다.
 
-사용자 fixture 정의: `Big Note`를 `progressUnit=PAGE`, `totalUnits=99`, `archivedAt=2026-07-30T00:00:00Z`로 생성 / `startMinute=1200, endMinute=1260, label="사용자 블록", kind=FREE`인 블록 1건 / `date="2026-08-20", orderIndex=0, type=DIARY, title="사용자 과제"`인 과제 1건.
+사용자 fixture 정의: `Big Note`를 `progressUnit=PAGE`, `totalUnits=99`, `archivedAt=2026-07-30T00:00:00Z`로 생성 / `date="2026-08-20", startMinute=1200, endMinute=1260, label="사용자 블록", kind=FREE`인 블록 1건 — **시드 블록의 날짜(`2026-07-29`)와 다른 날짜를 쓴다.** 같은 날짜를 쓰면 보존 검증이 겹침 규칙과 얽힌다 / `date="2026-08-20", orderIndex=0, type=DIARY, title="사용자 과제"`인 과제 1건.
 
 | # | 테스트명 | 입력 | 기대 결과 |
 |---|---|---|---|
@@ -331,9 +391,29 @@ DR-09가 요구한 절차다. **`prisma/seed.ts`를 임시로 고쳐** exact mat
 |---|---|---|---|
 | 27 | 책 표의 셀 변경이 잡히는가 | `Andrew Lost`의 `progressUnit`을 `PAGE`로 | `Book 9건이 기대 fixture와 정확히 일치한다`가 실패 |
 | 28 | 블록 표의 셀 변경이 잡히는가 | `뿌리깊은 국어`의 `label`을 `뿌리깊은국어`로 (공백 제거) | `ScheduleBlock 10건이 기대 fixture와 정확히 일치한다`가 실패 |
+| 28b | 블록 날짜 변경이 잡히는가 (UR-16) | 블록 1건의 `date`를 `2026-07-30`으로 | `ScheduleBlock 10건이 기대 fixture와 정확히 일치한다`와 `모든 블록이 같은 날짜에 속한다`가 **둘 다** 실패 |
 | 29 | 과제 표의 셀 변경이 잡히는가 | `2026-08-09`의 `endUnit`을 `217` → `218`로 | `Assignment 27건이 기대 fixture와 정확히 일치한다`가 실패 |
 
-**세 명령의 실제 출력을 완료 보고에 포함하고, 코드는 원상 복구된 상태여야 한다.**
+**네 명령(27·28·28b·29)의 실제 출력을 완료 보고에 포함하고, 코드는 원상 복구된 상태여야 한다.**
+
+### 정상 케이스 — 스크립트 구성 (`src/server/prisma.test.ts`, RR-03)
+
+| # | 테스트명 | 입력 | 기대 결과 |
+|---|---|---|---|
+| 30 | `db:setup이 db:deploy → db:wal → db:seed 순서로 조합된다` | `package.json`의 `scripts["db:setup"]` | 문자열이 정확히 `npm run db:deploy && npm run db:wal && npm run db:seed` |
+
+### 규칙 위반 케이스 — `db:setup` mutation (RR-03)
+
+`package.json`을 임시로 고쳐 케이스 30이 실제로 살아 있는지 확인하고 되돌린다.
+
+| # | 케이스명 | 임시 변경 | 기대 결과 |
+|---|---|---|---|
+| 31 | `db:seed` 누락이 잡히는가 | `db:setup`을 `"npm run db:deploy && npm run db:wal"`로 | 케이스 30이 실패. 완료 검증 스크립트(완료 조건 2)의 `assignments=27` 단정도 실패 |
+| 32 | 순서 변경이 잡히는가 | `db:setup`을 `"npm run db:deploy && npm run db:seed && npm run db:wal"`로 | 케이스 30이 실패 |
+
+**두 명령의 실제 출력을 완료 보고에 포함하고, `package.json`은 원상 복구된 상태여야 한다.** 원복 후 `git diff package.json`이 요구사항 18의 변경만 보여야 한다.
+
+31번이 두 곳에서 잡히는 것이 요점이다 — **문자열 검사(케이스 30)와 실제 실행(완료 조건 2)이 서로를 대신하지 않는다.** 문자열만 보면 스크립트가 실제로 도는지 모르고, 실행만 보면 순서 실수를 놓칠 수 있다.
 
 ## 완료 조건
 
@@ -342,50 +422,166 @@ DR-09가 요구한 절차다. **`prisma/seed.ts`를 임시로 고쳐** exact mat
 ```
 npm run typecheck                → 에러 0
 npm run lint                     → 에러 0
-npm test -- --reporter=verbose   → 실패 0건. 정상 케이스 1~14, 위반 15~20,
-                                   경계 21~26의 테스트명이 모두 출력에 나타난다
+npm test -- --reporter=verbose   → 실패 0건. 정상 케이스 1~14(10b 포함)·30,
+                                   위반 15~20, 경계 21~26의 테스트명이
+                                   모두 출력에 나타난다
 npm run build                    → 성공
 npm run e2e                      → 실패 0건
 ```
 
 **누적 테스트 개수를 완료 조건으로 쓰지 않는다.** 명명된 테스트 이름이 `--reporter=verbose` 출력에 나타나는 것으로 판정한다.
 
-### 2. 시드 실행 검증 — 격리된 임시 DB에서만 (DR-11)
+### 2. `db:setup` 실행 검증 — 격리된 임시 DB에서만 (DR-11, RR-03)
+
+**검증 대상은 `npm run db:setup` 자체다.** T04가 바꾸는 핵심 운영 경로가 그것이고, CI의 e2e job도 그 스크립트를 부른다 (T03 요구사항 25). **하위 script(`db:deploy`/`db:wal`/`db:seed`)를 따로 실행하고 `db:setup`을 검증했다고 하지 않는다** — 그렇게 하면 `db:seed` 누락이나 순서 실수가 그대로 통과한다.
 
 **개발 DB(`prisma/dev.db`)를 비우거나 `SEED_FORCE`로 덮어쓰지 않는다.** 완료 출력(9/10/27)은 빈 DB에서만 나오므로, 개발 DB에 데이터가 있으면 설계대로 skip되어 0이 출력된다. 그것은 정상 동작이며 완료 실패가 아니다. 따라서 검증은 새 임시 DB에서 수행한다.
 
+#### 2-1. 개발 DB 불변 검사의 범위 (DR-11)
+
+**본체 하나가 아니라 아래 세 파일 전부**를 검증 전후로 비교한다. 개발 DB는 WAL 모드이므로(T03), 오작동한 명령의 쓰기가 `-wal`에만 남아 **본체 checksum이 같을 수 있다.** 본체만 보면 그 변경을 놓친다.
+
+| 파일 | 없을 때 |
+|---|---|
+| `prisma/dev.db` | 존재 여부 자체를 `absent`로 **기록한다** (검사 생략이 아니다) |
+| `prisma/dev.db-wal` | 같음 |
+| `prisma/dev.db-shm` | 같음 |
+
+- 존재하는 파일은 `shasum -a 256`의 해시를 기록한다.
+- **존재하지 않던 파일이 생기거나, 있던 파일이 사라지는 것도 변경이다.** 그래서 존재 여부를 상태의 일부로 기록한다.
+- 세 파일이 모두 없는 깨끗한 저장소에서도 전후 스냅샷이 같으므로 검사는 그대로 성립한다.
+
+#### 2-2. 검증 스크립트
+
+**정상 경로와 실패 경로 모두에서 불변 검사가 실행되어야 한다.** 그래서 `set -e`로 중간에 빠져나가지 않고, `EXIT` trap 하나가 cleanup과 불변 검사를 모두 책임진다.
+
 ```bash
-set -e
-VERIFY_DB="$PWD/.tmp/verify-seed-$$.db"
+#!/usr/bin/env bash
+# 저장소 루트에서 실행한다. bash로 실행한다(배열을 쓴다).
+set -u          # -e를 쓰지 않는다 — 원래 종료 코드를 직접 다뤄야 하기 때문이다.
+
+VERIFY_DB="$PWD/.tmp/verify-setup-$$.db"
 mkdir -p "$PWD/.tmp"
-trap 'rm -f "$VERIFY_DB" "$VERIFY_DB-wal" "$VERIFY_DB-shm"' EXIT
 
-BEFORE=$(shasum "prisma/dev.db" 2>/dev/null || echo "no-dev-db")
+DEV_DB_FILES=("prisma/dev.db" "prisma/dev.db-wal" "prisma/dev.db-shm")
 
-DATABASE_URL="file:$VERIFY_DB" npm run db:deploy
-DATABASE_URL="file:$VERIFY_DB" npm run db:wal      # → journal_mode=wal
-DATABASE_URL="file:$VERIFY_DB" npm run db:seed     # → books=9 blocks=10 assignments=27
-DATABASE_URL="file:$VERIFY_DB" npm run db:seed     # → skipped: blocks=true assignments=true
+snapshot_dev_db() {
+  local f
+  for f in "${DEV_DB_FILES[@]}"; do
+    if [ -e "$f" ]; then
+      printf '%s present %s\n' "$f" "$(shasum -a 256 "$f" | awk '{print $1}')"
+    else
+      printf '%s absent -\n' "$f"
+    fi
+  done
+}
 
-AFTER=$(shasum "prisma/dev.db" 2>/dev/null || echo "no-dev-db")
-[ "$BEFORE" = "$AFTER" ] || { echo "개발 DB가 변경되었다"; exit 1; }
-echo "개발 DB 불변 확인: $BEFORE"
+BEFORE="$(snapshot_dev_db)"
+printf '개발 DB 사전 상태:\n%s\n' "$BEFORE"
+
+CLEANUP_FAILED=0
+CHECK_FAILED=0
+
+finish() {
+  ORIGINAL_STATUS=$?          # trap 진입 시점의 종료 코드를 가장 먼저 저장한다
+  trap - EXIT                 # 재진입 방지
+
+  # (1) cleanup — 임시 DB와 sidecar
+  rm -f "$VERIFY_DB" "$VERIFY_DB-wal" "$VERIFY_DB-shm" || CLEANUP_FAILED=1
+
+  # (2) 개발 DB 불변 검사 — 정상 경로와 실패 경로 모두에서 실행된다
+  AFTER="$(snapshot_dev_db)"
+  if [ "$BEFORE" = "$AFTER" ]; then
+    printf '개발 DB 불변 확인:\n%s\n' "$AFTER"
+  else
+    printf '개발 DB가 변경되었다.\n--- BEFORE ---\n%s\n--- AFTER ---\n%s\n' \
+      "$BEFORE" "$AFTER" >&2
+    CHECK_FAILED=1
+  fi
+
+  # (3) 종료 코드 우선순위 — 아래 순서로 판정한다
+  #     2: 개발 DB 불변 검사 실패  (가장 심각 — 사용자 데이터가 변했다)
+  #     3: cleanup 실패            (임시 파일이 남았다)
+  #     그 외: 원래 검증 명령의 종료 코드를 그대로 보존한다
+  if [ "$CHECK_FAILED" -ne 0 ]; then exit 2; fi
+  if [ "$CLEANUP_FAILED" -ne 0 ]; then exit 3; fi
+  exit "$ORIGINAL_STATUS"
+}
+trap finish EXIT
+
+# --- 검증 본문 ---------------------------------------------------------
+# SEED_FORCE는 반드시 명시적으로 unset 한다. 셸에 남아 있던 값을 상속하면
+# 의도치 않게 force 경로가 돌아 검증의 의미가 사라진다 (DR-11).
+
+# (A) db:setup 한 번으로 migration · WAL · seed가 모두 수행된다
+env -u SEED_FORCE DATABASE_URL="file:$VERIFY_DB" npm run db:setup || exit $?
+
+# (B) 단일 db:setup 실행 결과를 한 번에 확인한다
+env -u SEED_FORCE DATABASE_URL="file:$VERIFY_DB" node -e '
+const { PrismaClient } = require("@prisma/client");
+const c = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+(async () => {
+  const mode = (await c.$queryRawUnsafe("PRAGMA journal_mode;"))[0].journal_mode;
+  const applied = Number(
+    (await c.$queryRawUnsafe(
+      "SELECT COUNT(*) AS n FROM _prisma_migrations WHERE finished_at IS NOT NULL"
+    ))[0].n
+  );
+  const books = await c.book.count();
+  const blocks = await c.scheduleBlock.count();
+  const assignments = await c.assignment.count();
+  await c.$disconnect();
+  console.log(
+    `migrations=${applied} journal_mode=${mode} ` +
+    `books=${books} blocks=${blocks} assignments=${assignments}`
+  );
+  const ok = applied >= 1 && mode === "wal" &&
+             books === 9 && blocks === 10 && assignments === 27;
+  process.exit(ok ? 0 : 1);
+})().catch((e) => { console.error(e); process.exit(1); });
+' || exit $?
+
+# (C) 재실행 멱등성 — db:seed는 건너뛴다
+env -u SEED_FORCE DATABASE_URL="file:$VERIFY_DB" npm run db:seed || exit $?
+
+exit 0
+```
+
+#### 2-3. 실행 순서와 기대
+
+trap 설치부터 종료까지의 순서는 **모호함 없이 아래 하나뿐이다.**
+
+```
+1. BEFORE 스냅샷 (존재 여부 + 해시, 3파일)
+2. trap finish EXIT 설치
+3. 검증 본문 (A) → (B) → (C) 실행
+4. (어떤 경로로 끝나든) trap 진입
+5.   ORIGINAL_STATUS 저장
+6.   cleanup: 임시 .db / -wal / -shm 삭제
+7.   AFTER 스냅샷 + BEFORE와 비교
+8.   종료 코드 판정: 불변 검사 실패(2) > cleanup 실패(3) > ORIGINAL_STATUS
 ```
 
 | 단계 | 기대 |
 |---|---|
-| 1회차 `db:seed` | `seeded books=9 blocks=10 assignments=27 (skipped: blocks=false assignments=false)` |
-| 2회차 `db:seed` | `skipped: blocks=true assignments=true`, 종료 코드 0 |
-| 개발 DB checksum | 전후 동일 |
-| `trap` | 임시 `.db`·`-wal`·`-shm` 전부 삭제 |
+| (A) `db:setup` | `journal_mode=wal`과 `seeded books=9 blocks=10 assignments=27 (skipped: blocks=false assignments=false)`가 **한 번의 실행**으로 나온다 |
+| (B) 단일 실행 결과 확인 | `migrations=1 journal_mode=wal books=9 blocks=10 assignments=27`, 종료 코드 0 |
+| (C) 2회차 `db:seed` | `skipped: blocks=true assignments=true`, 종료 코드 0 |
+| 개발 DB 3파일 | 존재 여부와 해시가 전후 동일 |
+| cleanup | 임시 `.db`·`-wal`·`-shm` 전부 삭제 |
+| 최종 종료 코드 | 위 전부 만족 시 `0` |
 
-`prisma/dev.db`가 아직 없으면 양쪽이 `no-dev-db`로 같으므로 검사는 그대로 성립한다.
+`migrations`가 `0`이면 마이그레이션이 적용되지 않은 것이다. 값이 `1`이 아니라 그 이상이면 마이그레이션이 추가된 것이므로 `>= 1`로 판정한다.
 
-완료 보고에 위 스크립트의 **실제 출력 전문**과, mutation 케이스 27~29의 출력을 포함한다.
+완료 보고에 위 스크립트의 **실제 출력 전문**과, mutation 케이스 27~29·31·32의 출력을 포함한다.
 
 ## 금지 사항
 
-- **완료 검증을 위해 `prisma/dev.db`를 지우거나 `SEED_FORCE=1`로 실행하지 않는다** (DR-11).
+- **완료 검증을 위해 `prisma/dev.db`를 지우거나 `SEED_FORCE=1`로 실행하지 않는다** (DR-11). 개발 DB를 대상으로 `db:setup`·`db:deploy`·`db:seed`·`prisma migrate`·`prisma migrate reset` 중 어느 것도 완료 검증의 일부로 실행하지 않는다.
+- **완료 검증에서 `SEED_FORCE`를 상속하지 않는다.** 모든 검증 명령을 `env -u SEED_FORCE`로 실행한다 (DR-11).
+- **개발 DB 불변 검사를 `prisma/dev.db` 본체 하나로 줄이지 않는다.** `-wal`·`-shm`을 함께 본다 (DR-11의 2-1).
+- **하위 script만 따로 실행하고 `db:setup`을 검증했다고 보고하지 않는다** (RR-03). 완료 조건 2의 (A)는 `npm run db:setup` 한 줄이어야 한다.
+- 완료 검증의 `DATABASE_URL`을 상대 경로나 개발 DB 경로로 두지 않는다. `.tmp/` 아래의 **절대 경로**를 쓴다 (D19의 상대 경로 함정).
 - `prisma/seed.ts`가 `tests/fixtures/seed-expected.ts`를 import 하지 않는다. 그 반대도 금지 (DR-09).
 - `update: {}` 대신 시드값을 넣어 기존 Book을 덮어쓰지 않는다 (DR-10).
 - `force`에서 `Book`을 `deleteMany` 하지 않는다.
@@ -397,7 +593,9 @@ echo "개발 DB 불변 확인: $BEFORE"
 - 진도 표기가 없는 책에 `endUnit`을 추정해 넣지 않는다 (F4).
 - `Book.totalUnits`를 채우지 않는다. 실물에 없는 정보다.
 - 과제 상태를 `DONE`으로 시드하지 않는다. 지난 날짜 정리는 T17의 일괄 완료 기능이 담당한다 (부록 C.3).
-- `tests/helpers/db.ts`를 수정하지 않는다 (T03 소관).
+- `tests/helpers/db.ts`를 **어떤 이유로도 수정하지 않는다** (T03 소관). 헬퍼 변경이 필요하다고 판단되면 멈추고 보고한다.
+- `src/server/prisma.test.ts`에서 **요구사항 19·20이 지정한 두 변경 외의 것을 하지 않는다.** 기존 테스트를 고치거나 지우지 않는다.
+- `db:setup` 검증을 부분 문자열 포함이나 하위 명령 집합 비교로 바꾸지 않는다. exact match여야 순서가 검증된다 (RR-03).
 - `src/server/prisma.ts`, `prisma/schema.prisma`, `vitest.config.ts`, `.github/workflows/ci.yml`을 수정하지 않는다. T03이 이미 필요한 상태로 만들어 두었다.
 - 새 npm 의존성을 추가하지 않는다.
 
@@ -414,8 +612,13 @@ echo "개발 DB 불변 확인: $BEFORE"
 | 7 | fixture 중복 전사 | **의도된 중복이다** (DR-09). 두 파일이 서로를 참조하면 비교가 무의미해진다. 표가 바뀌면 두 곳을 함께 고치고, 그 사실을 PR 본문에 적는다 |
 | 8 | 문자열 정렬 방식 | 코드 유닛 비교. `localeCompare` 금지 (요구사항 16) |
 | 9 | `bookId` 비교 방법 | cuid는 비결정적이므로 `bookTitle`로 변환해 비교한다 (요구사항 14) |
-| 10 | 완료 검증 DB의 위치 | `.tmp/verify-seed-$$.db` 절대 경로. `.gitignore`의 `/.tmp/`가 T03에서 이미 추가되어 있다 |
-| 11 | 시드를 CI에서 돌릴 것인가 | 돌린다. T03이 e2e job에 `db:setup`을 넣어두었고 `db:setup`이 이제 `db:seed`를 포함한다. E2E 시나리오는 시드 데이터를 전제로 한다 |
+| 10 | 완료 검증 DB의 위치 | `.tmp/verify-setup-$$.db` 절대 경로. `.gitignore`의 `/.tmp/`가 T03에서 이미 추가되어 있다 |
+| 11 | 시드를 CI에서 돌릴 것인가 | 돌린다. T03이 e2e job에 `db:setup`을 넣어두었고 `db:setup`이 이제 `db:seed`를 포함한다. E2E 시나리오는 시드 데이터를 전제로 한다. **CI를 다시 고치지 않으므로 `db:setup` 조합 자체가 T04의 검증 대상이다** (RR-03) |
 | 12 | `SeedResult.books`의 의미 | 신규 생성이 아니라 **upsert된 총 건수**(항상 9). 책은 건너뛰기 대상이 아니다 |
 | 13 | 블록과 과제의 건너뛰기 판정 | 각각 독립적으로 자기 테이블의 건수만 본다. 한쪽만 비어 있어도 그쪽만 채운다 (경계 케이스 26) |
 | 14 | `.tmp/` 정리 | `cleanup()`이 개별 DB를 지우고 템플릿만 남는다. 스키마가 바뀌면 T03의 지문 검사가 템플릿을 자동 재생성하므로 수동 `rm -rf .tmp`는 필요하지 않다 |
+| 15 | `db:setup`을 두 곳에서 검증하는 이유 | 문자열 검사(케이스 30)는 **순서와 구성**을, 실행 검사(완료 조건 2)는 **실제로 동작하는지**를 본다. 어느 한쪽도 다른 쪽을 대신하지 못한다 (RR-03) |
+| 16 | 완료 검증의 종료 코드 우선순위 | **불변 검사 실패(2) > cleanup 실패(3) > 원래 명령의 종료 코드.** 개발 데이터 변경이 가장 심각하므로 다른 실패를 덮어쓴다. 반대로 하면 검증 명령이 실패한 실행에서 데이터 변경 사실이 묻힌다 (DR-11) |
+| 17 | `set -e`를 쓰지 않는 이유 | 원래 명령의 종료 코드를 보존하고 실패 경로에서도 불변 검사를 돌려야 하기 때문이다. `set -e`는 중간 실패 시 즉시 빠져나가 `ORIGINAL_STATUS` 판정을 어렵게 만든다. 대신 각 명령에 `\|\| exit $?`를 붙이고 `EXIT` trap 하나가 정리·검사를 책임진다 (DR-11) |
+| 18 | 개발 DB 불변 검사에 sidecar를 포함하는 이유 | 개발 DB는 WAL 모드(T03)이므로 쓰기가 `-wal`에만 남아 **본체 해시가 그대로일 수 있다.** 본체만 보면 변경을 놓친다. 존재 여부까지 상태로 기록하는 이유는 파일이 새로 생기거나 사라지는 것도 변경이기 때문이다 (DR-11) |
+| 19 | `SEED_FORCE` unset을 명시하는 이유 | 셸에 남아 있던 값을 상속하면 완료 검증이 조용히 force 경로를 타고, 그 결과 "비파괴가 기본"이라는 성질이 검증되지 않는다. 모든 검증 명령에 `env -u SEED_FORCE`를 붙인다 (DR-11) |

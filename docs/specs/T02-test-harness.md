@@ -6,6 +6,22 @@ vitest(단위·통합)와 Playwright(E2E)를 설치·설정하고, 두 프레임
 
 **이 태스크는 애플리케이션의 도메인 규칙을 검증하지 않는다.** 검증 대상은 (a) 하니스가 실제로 돌고 실패를 잡는가, (b) 실행 환경이 후속 태스크의 전제를 만족하는가, 두 가지뿐이다.
 
+## 요구사항 추적
+
+| 근거 | 내용 |
+|---|---|
+| **OR-03** | 이 태스크의 **존재 이유**다. "테스트와 교차 검증을 통해 결과 품질을 최대화한다"가 하니스·CI·실패 검출 확인의 근거다 |
+| OR-02 | 커버리지 도구·테스트 유틸 라이브러리를 도입하지 않고 chromium 1종만 설치한다 — 비용 최소화 |
+| **UR-14** | vitest·Playwright 선택과 Node 정책(D21)이 여기 걸린다 |
+| **UR-20, UR-20.1** | `playwright.config.ts`의 viewport `1024×768`. **태블릿 가로는 주요 인수 테스트 기준이며 제품을 그 폭으로 제한하지 않는다** — E2E가 이 폭에서 도는 것과 제품이 데스크톱에서 동작해야 하는 것(UR-20.2)은 양립한다 |
+| **UR-21** | `webServer.env`의 `E2E_TEST_MODE: "1"`은 상시 실행·시각 주입(D16·D20)에서 왔다. **이 태스크에서는 값을 읽는 코드가 없어 실행상 효과가 없다** |
+| **UR-22, UR-22.3** | `tests/env.test.ts`의 `Asia/Seoul` ICU 전제 검사. 이 파일은 **환경 능력만** 보고 도메인 규칙을 보지 않는다. 타임존의 **단일 정의처 검증(UR-22.1)은 T05**의 몫이다 |
+| NR-06 | WebSocket·SSE를 쓰지 않으므로 E2E에 실시간 연결 검증이 없다 |
+
+**제품 기능 요구(UR-04~UR-13)에 직접 대응하는 항목은 없다.**
+
+**설계 가정 12건(AP-01~AP-12)은 2026-08-01에 전부 처리되었다.** 이 태스크에 영향을 준 것은 AP-01·AP-07·AP-08·AP-09의 승인이며, AP-07과 AP-09는 **조건부**다 — 위 표의 UR-20.1·UR-20.2와 UR-22.1이 그 조건이다.
+
 ## 선행 태스크
 
 T01
@@ -42,11 +58,14 @@ vitest            ^3.0.0
 @playwright/test  ^1.50.0
 ```
 
-2. **Playwright 버전과 Node 정책 (D21, DR-03).** `^1.50.0`은 `<2.0.0` 전체를 허용하므로 현재 최신 1.x가 설치되고, 현행 Playwright의 시스템 요구사항은 **Node 22 / 24 / 26**이다. T01이 이미 `.nvmrc = 22`와 `engines.node = ">=22"`를 고정했으므로 이 조합은 지원 범위 안에 있다. 아래 세 가지를 지킨다.
+2. **Playwright 버전과 Node 정책 (D21, DR-03).** `^1.50.0`은 `<2.0.0` 전체를 허용하므로 현재 최신 1.x가 설치된다. 현행 Playwright의 시스템 요구사항은 **"Node.js: latest 22.x, 24.x or 26.x."** — **하한이 아니라 집합 {22, 24, 26}이다.** 공식 근거: [Playwright — Installation / System requirements](https://playwright.dev/docs/intro), 확인일 **2026-08-01**.
+
+   T01이 `.nvmrc = 22`(CI 기준선)와 `engines.node = "22 || 24 || 26"`(허용 집합)을 고정했으므로 이 조합은 지원 범위 안에 있다. 아래 네 가지를 지킨다.
 
    - 범위는 `^1.50.0`으로 두고 **정확한 버전은 `package-lock.json`이 고정한다.**
    - 설치 후 `npm ls @playwright/test playwright-core`와 `npx playwright --version`의 출력을 **완료 보고에 그대로 포함한다.**
-   - 설치된 Playwright가 Node 22를 지원 대상에서 제외한다면(향후 릴리스에서 하한이 올라가는 경우) **진행하지 말고 보고한다.** `.nvmrc`를 임의로 올리지 않는다 — D21을 갱신하는 것은 설계자의 일이다.
+   - **허용 메이저 집합은 `>=` 비교가 아니라 열거로 검사한다** (요구사항 9). `>= 22`로 검사하면 지원 목록에 없는 23·25·27이 통과한다 — 그것이 DR-03의 잔여 지적이다.
+   - 설치된 Playwright가 **Node 22를 지원 대상에서 제외**한다면(향후 릴리스에서 목록이 바뀌는 경우) **진행하지 말고 보고한다.** `.nvmrc`·`engines.node`·`SUPPORTED_NODE_MAJORS`를 임의로 올리지 않는다 — D21을 갱신하는 것은 설계자의 일이다. 목록에 새 메이저가 추가되거나 26이 빠지는 경우도 같다.
 
 3. `package.json`의 `scripts`에 아래 3개를 **추가**한다. 기존 스크립트는 수정하지 않는다.
 
@@ -94,8 +113,10 @@ describe("실행 환경 — ICU·타임존 전제", () => {
 
 describe("실행 환경 — Node 버전 정책", () => {
   it(".nvmrc가 22이다", ...);
-  it("package.json engines.node가 >=22이다", ...);
-  it("실행 중인 Node의 메이저 버전이 22 이상이다", ...);
+  it("package.json engines.node가 22 || 24 || 26이다", ...);
+  it("engines.node가 선언하는 메이저 집합이 지원 목록과 일치한다", ...);
+  it("실행 중인 Node의 메이저가 지원 목록에 있다", ...);
+  it("지원 목록에 없는 메이저는 거부된다", ...);
 });
 ```
 
@@ -110,15 +131,38 @@ describe("실행 환경 — Node 버전 정책", () => {
 
 이 테스트가 실패하면 Node의 ICU 데이터가 불완전한 것이며, **후속 태스크의 날짜 계산이 성립할 수 없다.** 그 경우 진행하지 말고 보고한다.
 
-9. Node 정책 검증은 D21의 "정의처는 하나"를 지킨다. 세 값을 exact match로 대조한다.
+9. **Node 정책 검증 (D21, DR-03).** 허용 메이저는 **하한이 아니라 집합**이다. 파일 상단에 아래 상수를 두고, 이 배열이 테스트 안에서의 유일한 기준이 된다.
 
-| 검증 | 기대 |
-|---|---|
-| `.nvmrc` 파일 내용을 trim한 값 | `"22"` |
-| `package.json`의 `engines.node` | `">=22"` |
-| `process.versions.node`의 메이저 정수 | `>= 22` |
+```ts
+/** D21: 현행 Playwright가 지원하는 Node 메이저. 하한이 아니라 열거다. */
+const SUPPORTED_NODE_MAJORS = [22, 24, 26] as const;
 
-앞의 두 값은 문자열 exact match다. 하나만 바뀌면 실패해야 한다 — 그것이 이 테스트의 목적이다 (D21의 대가 완화 장치).
+/** CI 기준선. .nvmrc의 값이자 SUPPORTED_NODE_MAJORS의 원소여야 한다. */
+const CI_BASELINE_MAJOR = 22;
+
+/** `"22 || 24 || 26"` → `[22, 24, 26]`. engines.node를 기계적으로 해석한다. */
+function parseEnginesMajors(engines: string): number[] {
+  return engines.split("||").map((part) => Number(part.trim()));
+}
+```
+
+검증 항목:
+
+| # | 테스트명 | 검증 | 기대 |
+|---|---|---|---|
+| 9-1 | `.nvmrc가 22이다` | `.nvmrc` 파일 내용을 trim한 값 | 문자열 `"22"`. 그리고 `Number(값) === CI_BASELINE_MAJOR`이며 `SUPPORTED_NODE_MAJORS`에 포함된다 |
+| 9-2 | `package.json engines.node가 22 \|\| 24 \|\| 26이다` | `package.json`의 `engines.node` | 문자열 exact match `"22 \|\| 24 \|\| 26"` |
+| 9-3 | `engines.node가 선언하는 메이저 집합이 지원 목록과 일치한다` | `parseEnginesMajors(engines.node)` | `[...SUPPORTED_NODE_MAJORS]`와 **deep equal** (순서 포함) |
+| 9-4 | `실행 중인 Node의 메이저가 지원 목록에 있다` | `Number(process.versions.node.split(".")[0])` | `SUPPORTED_NODE_MAJORS.includes(major) === true` |
+| 9-5 | `지원 목록에 없는 메이저는 거부된다` | `SUPPORTED_NODE_MAJORS.includes(m)` — `m ∈ {20, 21, 23, 25, 27}` | 다섯 값 전부 `false` |
+
+**규칙:**
+
+- **9-4에 `>=` 비교를 쓰지 않는다.** `major >= 22`는 지원 목록에 없는 23·25·27을 통과시킨다 — DR-03이 남긴 잔여 결함이 정확히 이것이다.
+- 9-3이 있으므로 `engines.node` 문자열과 `SUPPORTED_NODE_MAJORS`가 갈라질 수 없다. 9-1이 `.nvmrc`를 그 집합에 묶는다. **세 값이 한 집합을 말한다는 것이 이 describe의 목적이다.**
+- 9-5는 실제로 Node 23을 설치해 돌릴 수 없으므로 **판정 함수를 직접 검사**한다. 이 테스트가 있어야 "미지원 메이저는 거부된다"가 반증 가능한 명제가 된다.
+- 로컬 Node **24.18.0에서 9-4는 통과한다** — 24가 집합 안에 있다. `.nvmrc`의 22는 CI 기준선이지 로컬 강제값이 아니다 (D21).
+- `engines`는 npm에서 기본적으로 경고에 그치므로 **지원되지 않는 메이저에서 완료 검증을 실패시키는 장치는 9-4다.** `.npmrc`나 `engine-strict`를 추가하지 않는다.
 
 10. `playwright.config.ts`를 아래 내용으로 작성한다.
 
@@ -263,8 +307,10 @@ E2E만 확장자가 `.spec.ts`다. 이 차이가 vitest와 Playwright의 수집 
 |---|---|
 | Node 실행 환경은 완전한 IANA 타임존 데이터를 가져야 한다 | `같은 순간을 Asia/Seoul과 UTC에서 다른 달력 날짜로 포매팅한다`가 실패. **진행 중단 후 보고** |
 | 단위 테스트는 프로세스 TZ가 UTC인 상태에서 돈다 | `단위 테스트 프로세스의 TZ 기본값이 UTC다`가 실패 |
-| Node 버전 정의처는 `.nvmrc` 하나다 (D21) | `.nvmrc가 22이다` 또는 `package.json engines.node가 >=22이다`가 실패 |
-| Playwright는 Node 22 이상에서 돈다 (D21) | `실행 중인 Node의 메이저 버전이 22 이상이다`가 실패, 또는 `npm run e2e`가 unsupported Node 경고·오류 |
+| CI 기준선의 정의처는 `.nvmrc` 하나다 (D21) | `.nvmrc가 22이다`가 실패 |
+| 허용 Node 집합은 `.nvmrc`·`engines.node`·`SUPPORTED_NODE_MAJORS`에서 동일하다 (D21, DR-03) | `package.json engines.node가 22 \|\| 24 \|\| 26이다` 또는 `engines.node가 선언하는 메이저 집합이 지원 목록과 일치한다`가 실패 |
+| Playwright는 Node 22 · 24 · 26에서만 돈다 (D21) | `실행 중인 Node의 메이저가 지원 목록에 있다`가 실패, 또는 `npm run e2e`가 unsupported Node 경고·오류 |
+| 지원 목록에 없는 메이저(20·21·23·25·27)를 통과시키지 않는다 (DR-03) | `지원 목록에 없는 메이저는 거부된다`가 실패 |
 | Tailwind 유틸리티가 브라우저에서 적용된다 (DR-02) | `Tailwind 유틸리티가 브라우저에서 실제로 적용된다`가 실패 |
 | E2E는 프로덕션 빌드로 돈다 (D16-e) | `webServer.command`가 `npm run dev`이면 완료 조건 미충족 |
 | E2E는 직렬 실행한다 | `workers`가 1이 아니면 완료 조건 미충족 |
@@ -280,9 +326,11 @@ E2E만 확장자가 `.spec.ts`다. 이 차이가 vitest와 Playwright의 수집 
 | 1 | `같은 순간을 Asia/Seoul과 UTC에서 다른 달력 날짜로 포매팅한다` | `tests/env.test.ts` | `2026-08-01T15:00:00.000Z` | Seoul `"2026-08-02"`, UTC `"2026-08-01"` |
 | 2 | `Asia/Seoul 타임존을 Intl이 인식한다` | `tests/env.test.ts` | — | `Intl.supportedValuesOf("timeZone")`에 `"Asia/Seoul"` 포함 |
 | 3 | `단위 테스트 프로세스의 TZ 기본값이 UTC다` | `tests/env.test.ts` | — | `process.env.TZ === "UTC"` |
-| 4 | `.nvmrc가 22이다` | `tests/env.test.ts` | `.nvmrc` 내용 | trim 결과가 `"22"` |
-| 5 | `package.json engines.node가 >=22이다` | `tests/env.test.ts` | `package.json` | `engines.node === ">=22"` |
-| 6 | `실행 중인 Node의 메이저 버전이 22 이상이다` | `tests/env.test.ts` | `process.versions.node` | 메이저 `>= 22` |
+| 4 | `.nvmrc가 22이다` | `tests/env.test.ts` | `.nvmrc` 내용 | trim 결과가 `"22"`이고 `SUPPORTED_NODE_MAJORS`에 포함 |
+| 5 | `package.json engines.node가 22 \|\| 24 \|\| 26이다` | `tests/env.test.ts` | `package.json` | `engines.node === "22 \|\| 24 \|\| 26"` |
+| 5b | `engines.node가 선언하는 메이저 집합이 지원 목록과 일치한다` | `tests/env.test.ts` | `parseEnginesMajors(engines.node)` | `[22, 24, 26]`과 deep equal |
+| 6 | `실행 중인 Node의 메이저가 지원 목록에 있다` | `tests/env.test.ts` | `process.versions.node` | 메이저가 `SUPPORTED_NODE_MAJORS`에 **포함**. `>=` 비교 금지 |
+| 6b | `지원 목록에 없는 메이저는 거부된다` | `tests/env.test.ts` | `20, 21, 23, 25, 27` | 다섯 값 전부 미포함 판정 |
 | 7 | `루트 화면이 렌더링된다` | `e2e/smoke.spec.ts` | `GET /` | `<h1>` 텍스트가 `r-hw` |
 | 8 | `Tailwind 유틸리티가 브라우저에서 실제로 적용된다` | `e2e/smoke.spec.ts` | `GET /` | `<h1>`의 computed `font-size`가 `42px` |
 
@@ -293,9 +341,11 @@ E2E만 확장자가 `.spec.ts`다. 이 차이가 vitest와 Playwright의 수집 
 | 9 | 실패하는 단위 테스트가 CI를 깨는가 | `tests/env.test.ts`에 `expect(1).toBe(2)`를 임시 추가 | `npm test` 종료 코드 ≠ 0 |
 | 10 | 실패하는 E2E가 감지되는가 | `e2e/smoke.spec.ts`의 기대 텍스트를 `r-hw!`로 임시 변경 | `npm run e2e` 종료 코드 ≠ 0 |
 | 11 | Node 정책 불일치가 감지되는가 | `.nvmrc`를 `20`으로 임시 변경 | `.nvmrc가 22이다`가 실패 |
+| 11b | 하한 선언으로의 회귀가 감지되는가 | `package.json`의 `engines.node`를 `">=22"`로 임시 변경 | `package.json engines.node가 22 \|\| 24 \|\| 26이다`와 `engines.node가 선언하는 메이저 집합이 지원 목록과 일치한다`가 **둘 다** 실패 (DR-03) |
+| 11c | 미지원 메이저 추가가 감지되는가 | `SUPPORTED_NODE_MAJORS`에 `23`을 임시 추가 | `engines.node가 선언하는 메이저 집합이 지원 목록과 일치한다`와 `지원 목록에 없는 메이저는 거부된다`가 **둘 다** 실패 |
 | 12 | Tailwind 미적용이 감지되는가 | `src/app/page.tsx`의 `text-[42px]`를 임시 제거하고 `npm run e2e` | `Tailwind 유틸리티가 브라우저에서 실제로 적용된다`가 실패 |
 
-9~12번은 하니스가 실패를 실제로 잡는지 확인하는 절차다. **네 명령의 실제 출력을 완료 보고에 포함하고, 코드는 원상 복구된 상태여야 한다.** 12번은 T01 파일을 임시 수정하므로 특히 원복을 확인한다.
+9~12번(11b·11c 포함)은 하니스가 실패를 실제로 잡는지 확인하는 절차다. **여섯 명령의 실제 출력을 완료 보고에 포함하고, 코드는 원상 복구된 상태여야 한다.** 11·11b는 T01 파일(`.nvmrc`, `package.json`)을, 12번은 T01의 `src/app/page.tsx`를 임시 수정하므로 특히 원복을 확인한다 — 원복 후 `git diff .nvmrc package.json src/app/page.tsx`가 비어 있어야 하고, 그 출력을 보고에 포함한다.
 
 ### 경계 케이스
 
@@ -322,12 +372,13 @@ DR-04에 대한 응답이다. **`tests/env.test.ts`는 실행 환경의 전제�
 ## 완료 조건
 
 ```
-node -v                                        → v22 이상
+node -v                                        → 메이저가 22 · 24 · 26 중 하나 (D21)
 npm ci                                         → 종료 코드 0
 npm run typecheck                              → 에러 0
 npm run lint                                   → 에러 0
-npm test -- --reporter=verbose                 → 실패 0건. 위 정상 케이스 1~6의
-                                                 테스트명이 모두 출력에 나타난다
+npm test -- --reporter=verbose                 → 실패 0건. 위 정상 케이스 1~6
+                                                 (5b·6b 포함)의 테스트명이 모두
+                                                 출력에 나타난다
 npm run e2e                                    → 실패 0건. 정상 케이스 7~8 통과
 npm run build                                  → 성공
 npm ls @playwright/test playwright-core        → 출력을 보고에 포함
@@ -336,13 +387,15 @@ npx playwright --version                       → 출력을 보고에 포함
 
 **누적 테스트 개수를 완료 조건으로 쓰지 않는다.** 대신 이 스펙에 명명된 테스트 이름이 `--reporter=verbose` 출력에 모두 나타나는 것으로 판정한다. 개수 합산은 후속 태스크가 테스트를 추가할 때마다 어긋나며, 그 어긋남은 실제 결함이 아니다.
 
-완료 보고에는 `npm test`, `npm run e2e`, 위반 케이스 9~12의 **실제 출력 전문**을 포함한다.
+완료 보고에는 `npm test`, `npm run e2e`, 위반 케이스 9~12(11b·11c 포함)의 **실제 출력 전문**을 포함한다.
 
 ## 금지 사항
 
 - `src/` 아래에 파일을 만들지 않는다. 이 태스크는 테스트 대상 코드를 추가하지 않는다.
-- **T01이 만든 파일(`.nvmrc`, `package.json`의 T01 항목, `src/app/**`)을 영구 수정하지 않는다.** 위반 케이스 11·12는 검증을 위한 임시 수정이며 **반드시 원복하고, 원복 후 `git diff`로 확인한다.** 이 두 파일은 `변경 대상 파일` 목록에 없으므로 최종 커밋에 나타나서는 안 된다 (`package.json`은 스크립트·devDependency 추가만 허용).
-- `.nvmrc`의 값을 **영구적으로** 바꾸지 않는다. 22가 맞지 않다고 판단되면 멈추고 보고한다 — D21을 갱신하는 것은 설계자의 일이다.
+- **T01이 만든 파일(`.nvmrc`, `package.json`의 T01 항목, `src/app/**`)을 영구 수정하지 않는다.** 위반 케이스 11·11b·12는 검증을 위한 임시 수정이며 **반드시 원복하고, 원복 후 `git diff`로 확인한다.** `.nvmrc`와 `src/app/**`은 `변경 대상 파일` 목록에 없으므로 최종 커밋에 나타나서는 안 된다 (`package.json`은 스크립트·devDependency 추가만 허용하며 `engines.node`는 건드리지 않는다).
+- `.nvmrc`나 `engines.node`의 값을 **영구적으로** 바꾸지 않는다. `.nvmrc = 22` 또는 허용 집합 {22, 24, 26}이 맞지 않다고 판단되면 멈추고 보고한다 — D21을 갱신하는 것은 설계자의 일이다.
+- `SUPPORTED_NODE_MAJORS`를 `>=` 비교로 바꾸거나 목록에 없는 메이저를 추가하지 않는다 (DR-03).
+- `.npmrc`를 만들거나 `engine-strict`를 설정하지 않는다. 지원 목록 강제는 요구사항 9의 테스트가 담당한다 (D21).
 - CI에 Node 버전을 하드코딩하지 않는다. `node-version-file`만 쓴다.
 - Prisma, Zod 등 후속 태스크의 의존성을 추가하지 않는다.
 - 테스트 유틸 라이브러리(`@testing-library/*`, `jsdom`, `happy-dom`, `msw` 등)를 추가하지 않는다.
@@ -355,9 +408,9 @@ npx playwright --version                       → 출력을 보고에 포함
 
 | # | 지점 | 결정 |
 |---|---|---|
-| 1 | Node 버전 | **22, 정의처는 `.nvmrc`** (D21). CI는 `node-version-file`로 읽는다 |
-| 2 | Playwright 버전 | 범위 `^1.50.0`, 정확한 버전은 lockfile. 설치 버전을 보고에 기록한다. 향후 릴리스가 Node 22를 제외하면 중단 후 보고 |
-| 3 | E2E 브라우저 | **chromium 하나만.** 아이 기기는 태블릿 1대이고(Q3) 브라우저 호환성은 이 앱의 위험 요소가 아니다 |
+| 1 | Node 버전 | **허용 집합 {22, 24, 26}, CI 기준선 22, 기준선의 정의처는 `.nvmrc`** (D21). CI는 `node-version-file`로 읽는다. 허용 집합은 `engines.node`와 `SUPPORTED_NODE_MAJORS`가 함께 선언하고 요구사항 9의 테스트가 대조한다 |
+| 2 | Playwright 버전 | 범위 `^1.50.0`, 정확한 버전은 lockfile. 설치 버전을 보고에 기록한다. 향후 릴리스가 지원 목록을 바꾸면(특히 Node 22 제외) 중단 후 보고 |
+| 3 | E2E 브라우저 | **chromium 하나만.** 아이 기기는 태블릿 1대이고(UR-20) 단일 가족용 시스템이므로(UR-14) 브라우저 호환성은 이 앱의 위험 요소가 아니다. 데스크톱 지원(UR-20.2)은 같은 chromium 엔진 위에서 폭만 달라지는 문제다 |
 | 4 | E2E 뷰포트 | **1024×768 고정** (§6.4의 기준 폭). 세로 768px 검증은 화면 태스크에서 개별 스펙으로 추가한다 |
 | 5 | `E2E_TEST_MODE`를 지금 켜두는 것 | **켜둔다.** 값을 읽는 코드는 T09에서 생기며 그때까지 효과가 없다. E2E 서버 기동 설정을 한 파일에 모으기 위한 선택이다 (D20) |
 | 6 | `webServer.env`의 병합 여부 | 병합되지 않아 `PATH`를 잃으면 요구사항 12의 방식으로만 해결한다 |
