@@ -1,8 +1,8 @@
 # Workflow Status
 
 - current_branch: docs/specs-batch1
-- stage: spec-reviewed
-- doc_status: changes-requested
+- stage: spec-revision
+- doc_status: ready-for-rereview
 - active_tasks: T01, T02, T03, T04
 - spec_writer: claude
 - spec_reviewer: codex
@@ -13,8 +13,8 @@
 - original_review_file: docs/reviews/DR-T01-T04-spec-review.md
 - original_review_commit: b4511c7
 - rereview_base_commit: c77ab5c33122da5fd3414e1ed054fe22224506fc
-- revision_round: 4
-- revision_baseline_commit: 9acc7b2
+- revision_round: 5
+- revision_baseline_commit: be0d6b2
 - overall_verdict: BLOCK
 - T01_verdict: PASS
 - T02_verdict: PASS
@@ -26,8 +26,8 @@
 - unapproved_design_assumptions: 0
 - open_implementation_details: 0
 - open_implementation_detail_ids: —
-- next_action: Claude fixes blocking R2-04 mutation 29c/29d and nonblocking R4-01/R4-02; Codex then independently rereviews
-- next_owner: claude
+- next_action: Codex Round 5 independent rereview
+- next_owner: codex
 
 ## Verdict ownership
 
@@ -35,7 +35,7 @@
 
 Round 2·3의 Codex 판정과 심각도 집계는 **역사적 기록이며 변경하지 않았다.** Claude revision 3·4의 집계도 과거 수정 이력이다. 현재 잔여 심각도는 아래 **Round 4 — Codex verdict** 절이 정의한다.
 
-`doc_status`는 `changes-requested`다. 기존 재검증 Finding 6건 중 5건은 RESOLVED, R2-04는 PARTIALLY RESOLVED이며, 회귀 대상 4건은 모두 RESOLVED를 유지한다. 신규 P3 R4-01·R4-02는 비차단이지만 R2-04의 잔여 P2가 T04 구현을 차단하므로 `implementation_allowed`는 `false`다.
+`doc_status`는 `ready-for-rereview`다. 이는 **Claude의 revision 5 수정이 끝나 재검토를 받을 준비가 됐다는 뜻일 뿐, Finding이 해소됐다는 판정이 아니다.** Codex Round 4의 판정은 그대로다 — 기존 재검증 Finding 6건 중 5건 RESOLVED, R2-04는 PARTIALLY RESOLVED, 회귀 대상 4건은 RESOLVED 유지, 신규 P3 2건. R2-04의 잔여 P2가 T04를 차단하므로 `overall_verdict`는 `BLOCK`, `implementation_allowed`는 `false`로 유지된다. 두 값은 **Codex Round 5에서만** 바뀔 수 있다.
 
 `open_implementation_details`가 `0`인 것은 **R3-01이 지적한 미결 선택(빈 날짜 · validation · HTTP 분류 · 결정적 rollback test)을 문서가 이제 지정한다**는 사실 기록이다. Codex Round 4는 이 원문 계약을 독립 대조해 R3-01을 `RESOLVED`로 판정했다.
 
@@ -170,6 +170,20 @@ Round 3 태스크 판정은 **T01 PASS / T02 PASS / T03 BLOCK / T04 BLOCK / over
 
 Round 4 태스크 판정은 **T01 PASS / T02 PASS / T03 PASS / T04 BLOCK / overall BLOCK**이다. P2 R2-04가 T04 구현을 차단하므로 `implementation_allowed`는 **false**다. 상세 근거는 `docs/reviews/DR-T01-T04-spec-rereview-round4.md`에 있다.
 
+### Revision 5 — Claude 수정 (baseline `be0d6b2`, 미커밋)
+
+**모든 항목의 상태는 `addressed_by_claude` / `pending_codex_verification`이다. RESOLVED · PASS · CLOSED 판정과 `implementation_allowed` 변경은 Codex Round 5 독립 재검토에서만 나온다.** Codex Round 4의 판정과 심각도 집계는 위 절에 그대로 남아 있으며 이번 revision에서 바꾸지 않았다.
+
+| Finding | Round 4 Codex verdict (불변) | 상태 | 무엇을 고쳤는가 |
+|---|---|---|---|
+| R2-04 | PARTIALLY RESOLVED (P2, T04 차단) | addressed_by_claude / pending_codex_verification | mutation 29b~29e를 **"단계를 트랜잭션 앞으로 옮기는" 방식에서 "트랜잭션 경계를 뒤로 미루는" 방식으로 재정의**했다. Round 4가 지적한 결함 — 조건부 생성 단계(4·6단계)만 앞으로 끌어올리면 `force` 삭제 전이라 `count() === 0` 가드가 거짓이 되어 생성이 skip되고, 6단계는 Book upsert보다 앞서 실행돼 `bookId` 외래키 전제까지 깨진다 — 를 없앤다. 경계를 미루면 **단계 순서와 선행 조건이 원본 그대로**이고 어느 단계까지 커밋되는지만 달라진다: 29b는 경계를 2단계로, **29c는 5단계로**, **29d는 7단계로** 미루고 29e는 경계를 완전히 제거한다. 따라서 `force` 삭제가 생성 가드보다 먼저 커밋되고 Book upsert가 과제 생성보다 먼저 커밋된다. mutation별 **fixture 사전 상태 · 실제 커밋되는 행 · 실패 hook · 스냅샷 차이 · 실패해야 하는 테스트**를 표로 명시하고, **fixture의 기존 키와 생성 대상 unique key를 대조**해 create가 실제로 일어남을 증명했다 — `Book_title_key` 기준으로 `Big Note`는 update 1건·나머지 8건 create(가드 없음), 블록·과제는 `force` 삭제 후 가드가 0이 되어 10건·27건 전부 create. **29b~29e 전체 교차 검토 표**를 추가해 같은 skip 거짓 양성이 다른 mutation에도 없음을 확인했다. 전체 DB 스냅샷 · 새 `PrismaClient` · deep equality 원칙과 seam의 운영 경로 비노출은 그대로 유지했다. 존재하지 않는 ID · 별도 writer · `SQLITE_BUSY` · 타이밍 경쟁 금지도 유지 |
+| R4-01 | NEW (P3, 비차단) | addressed_by_claude / pending_codex_verification | `docs/requirements.md:20`의 "위 **다섯** 항목"을 **"위 여섯 항목"** 으로 정정하고, 4+2의 내역(요구사항 진술 · AP 결정 · `OPEN-01` 결정 · `OPEN-02` 결정 / mockup 2건)을 문장 안에 명시해 12~18행의 6개 bullet과 대조 가능하게 했다. 출처 항목 자체는 바뀌지 않았으므로 `requirements_source`와 추적 결과에 영향이 없다 |
+| R4-02 | NEW (P3, 비차단) | addressed_by_claude / pending_codex_verification | mutation 명령 총계를 실제와 일치시켰다. seed mutation 8개(27 · 28 · 28b · 29 · 29b · 29c · 29d · 29e)와 `db:setup` mutation 2개(31 · 32)를 합쳐 **열 명령**이며, 모호한 "30 계열" 표기를 제거하고 두 출처를 문장에서 구분했다. 완료 보고 항목(`docs/specs/T04-seed.md`의 "mutation 케이스 27~29·31·32")도 같은 **열 개 명시 목록**으로 통일했다. 정상 케이스 30은 mutation이 아니므로 세지 않는다. 원복 조건도 정정 — `prisma/seed.ts`는 빈 diff, `package.json`은 요구사항 18의 변경만 남는다 |
+
+**회귀 방지 확인.** 이번 revision은 `docs/specs/T01-scaffold.md` · `T02-test-harness.md` · `T03-prisma-schema.md`를 **수정하지 않았다.** T03의 `-journal` sentinel 계약(16-A · 16-a2 · 24b-2)과 T04 완료 검증의 개발 DB **4파일** 보호 범위(`prisma/dev.db` · `-wal` · `-shm` · `-journal`)는 그대로다. DR-12 · RR-02 · R2-01 · R2-03 · R2-05 · R3-01 · R3-02와 T01 · T02 · T03의 PASS 근거에 닿는 변경은 없다.
+
+**이번 revision이 수정한 파일:** `docs/requirements.md`, `docs/specs/T04-seed.md`, `docs/workflow/STATUS.md`. `docs/architecture.md`와 `docs/decisions.md`는 허용 범위였으나 **수정할 내용이 없어 변경하지 않았다** — R2-04는 T04 SPEC 한정이고, R4-01·R4-02는 각각 requirements와 T04 SPEC의 문구 오류다.
+
 ### Revision 3 — Claude 수정 (baseline `8b8c051`, 미커밋)
 
 **모든 항목의 상태는 `addressed_by_claude` / `pending_codex_verification`이다. RESOLVED 판정은 다음 Codex 독립 재검토에서만 나온다.**
@@ -290,6 +304,6 @@ All twelve are resolved. **No unapproved design assumption remains.**
 
 `implementation_allowed` is `false`. Codex Round 4에서 R2-04의 구현 차단 P2가 남았으므로 구현을 시작할 수 없다. 이번 검토 작업에는 구현, package install, DB operation, branch change, commit, push, PR, merge, deployment가 포함되지 않았다.
 
-Codex Round 4 독립 재검토가 끝났다. **다음 담당자는 Claude**이며, 다음 작업은 R2-04의 mutation 29c·29d를 결정적으로 고치고 비차단 문구 결함 R4-01·R4-02도 수정하는 것이다. 그 뒤 **Codex가 다시 독립 재검토**하며, 구현은 그 판정 전까지 시작하지 않는다. Claude revision 3·4의 자기 보고와 Codex Round 2·3 기록은 과거 이력으로 보존했다.
+Claude revision 5가 끝났다. **다음 담당자는 Codex**이며, 다음 작업은 `be0d6b2` 이후 문서 변경에 대한 **Round 5 독립 재검토**다. R2-04 · R4-01 · R4-02는 전부 `addressed_by_claude` / `pending_codex_verification`이며, **작성자인 Claude는 어떤 Finding도 RESOLVED · PASS · CLOSED로 판정하지 않았고 `implementation_allowed`를 바꾸지 않았다.** 구현은 Codex의 판정 전까지 시작하지 않는다. Claude revision 3 · 4의 자기 보고와 Codex Round 2 · 3 · 4 기록은 과거 이력으로 보존했다.
 
 이번 세션에서 구현은 시작하지 않았고 커밋 · 푸시 · PR · merge · 패키지 설치 · migration · seed · DB 실행도 하지 않았다.
