@@ -1,41 +1,41 @@
 # Workflow Status
 
 - current_branch: docs/specs-batch1
-- stage: spec-revision
-- doc_status: ready-for-rereview
+- stage: spec-reviewed
+- doc_status: approved
 - active_tasks: T01, T02, T03, T04
 - spec_writer: claude
 - spec_reviewer: codex
-- review_round: 4
-- review_target_commit: 9a70c5c42ea9d38aea0d30b5eccb9a527b20c7b1
-- review_file: docs/reviews/DR-T01-T04-spec-rereview-round4.md
-- previous_review_file: docs/reviews/DR-T01-T04-spec-rereview-round3.md
+- review_round: 5
+- review_target_commit: c8d59fec3f7e557b450ae78fd29ea00bf22f020b
+- review_file: docs/reviews/DR-T01-T04-spec-rereview-round5.md
+- previous_review_file: docs/reviews/DR-T01-T04-spec-rereview-round4.md
 - original_review_file: docs/reviews/DR-T01-T04-spec-review.md
 - original_review_commit: b4511c7
 - rereview_base_commit: c77ab5c33122da5fd3414e1ed054fe22224506fc
 - revision_round: 5
 - revision_baseline_commit: be0d6b2
-- overall_verdict: BLOCK
+- overall_verdict: PASS
 - T01_verdict: PASS
 - T02_verdict: PASS
 - T03_verdict: PASS
-- T04_verdict: BLOCK
-- implementation_allowed: false
+- T04_verdict: PASS
+- implementation_allowed: true
 - requirements_file: docs/requirements.md
 - requirements_source: user statements of 2026-08-01 (requirements + AP-01..AP-12 decisions + OPEN-01 decision + OPEN-02 decision) + both mockups
 - unapproved_design_assumptions: 0
 - open_implementation_details: 0
 - open_implementation_detail_ids: —
-- next_action: Codex Round 5 independent rereview
-- next_owner: codex
+- next_action: User reviews Round 5 PASS, then approves document-branch PR creation; CI/docs validation and user Merge approval must precede implementation
+- next_owner: user
 
 ## Verdict ownership
 
-**Only Codex changes finding verdicts.** Claude is the spec author and does not mark its own work `RESOLVED`, `PASS`, or `CLOSED`. 아래 revision 3·4의 `addressed_by_claude` / `pending_codex_verification` 이력은 그대로 보존한다. **현재 `overall_verdict`와 태스크별 판정은 Codex Round 4의 결과다** — T01 PASS · T02 PASS · T03 PASS · T04 BLOCK · overall BLOCK.
+**Only Codex changes finding verdicts.** Claude is the spec author and does not mark its own work `RESOLVED`, `PASS`, or `CLOSED`. 아래 revision 3·4·5의 `addressed_by_claude` / `pending_codex_verification` 이력은 그대로 보존한다. **현재 `overall_verdict`와 태스크별 판정은 Codex Round 5의 결과다** — T01 PASS · T02 PASS · T03 PASS · T04 PASS · overall PASS.
 
-Round 2·3의 Codex 판정과 심각도 집계는 **역사적 기록이며 변경하지 않았다.** Claude revision 3·4의 집계도 과거 수정 이력이다. 현재 잔여 심각도는 아래 **Round 4 — Codex verdict** 절이 정의한다.
+Round 2·3·4의 Codex 판정과 심각도 집계는 **역사적 기록이며 변경하지 않았다.** Claude revision 3·4·5의 집계도 과거 수정 이력이다. 현재 판정과 잔여 심각도는 아래 **Round 5 — Codex verdict** 절이 정의한다.
 
-`doc_status`는 `ready-for-rereview`다. 이는 **Claude의 revision 5 수정이 끝나 재검토를 받을 준비가 됐다는 뜻일 뿐, Finding이 해소됐다는 판정이 아니다.** Codex Round 4의 판정은 그대로다 — 기존 재검증 Finding 6건 중 5건 RESOLVED, R2-04는 PARTIALLY RESOLVED, 회귀 대상 4건은 RESOLVED 유지, 신규 P3 2건. R2-04의 잔여 P2가 T04를 차단하므로 `overall_verdict`는 `BLOCK`, `implementation_allowed`는 `false`로 유지된다. 두 값은 **Codex Round 5에서만** 바뀔 수 있다.
+`doc_status`는 `approved`다. Codex Round 5가 R2-04·R4-01·R4-02를 모두 `RESOLVED`로 판정했고, 회귀 0건·신규 Finding 0건을 확인했다. 따라서 T01~T04와 overall은 모두 `PASS`, `implementation_allowed`는 `true`다. 이 승인은 **문서상 구현 가능성 게이트**이며 구현 시작 명령이 아니다. 문서 브랜치 PR·CI 또는 문서 검증·사용자 Merge 승인·`main` Merge가 먼저다.
 
 `open_implementation_details`가 `0`인 것은 **R3-01이 지적한 미결 선택(빈 날짜 · validation · HTTP 분류 · 결정적 rollback test)을 문서가 이제 지정한다**는 사실 기록이다. Codex Round 4는 이 원문 계약을 독립 대조해 R3-01을 `RESOLVED`로 판정했다.
 
@@ -184,6 +184,48 @@ Round 4 태스크 판정은 **T01 PASS / T02 PASS / T03 PASS / T04 BLOCK / overa
 
 **이번 revision이 수정한 파일:** `docs/requirements.md`, `docs/specs/T04-seed.md`, `docs/workflow/STATUS.md`. `docs/architecture.md`와 `docs/decisions.md`는 허용 범위였으나 **수정할 내용이 없어 변경하지 않았다** — R2-04는 T04 SPEC 한정이고, R4-01·R4-02는 각각 requirements와 T04 SPEC의 문구 오류다.
 
+### Round 5 — Codex verdict at target `c8d59fe`
+
+- rereviewed_findings_total_round5: 3
+- resolved_round5: 3
+- partially_resolved_round5: 0
+- unresolved_round5: 0
+- regressed_round5: 0
+- regression_findings_checked_round5: 9
+- regression_findings_resolved_round5: 9
+- new_findings_total_round5: 0
+- new_P0_round5: 0
+- new_P1_round5: 0
+- new_P2_round5: 0
+- new_P3_round5: 0
+- remaining_P0: 0
+- remaining_P1: 0
+- remaining_P2: 0
+- remaining_P3: 0
+- implementation_blocking_findings: 0
+
+| Round 5 direct target | Codex verdict | Implementation blocking | Result |
+|---|---|---|---|
+| R2-04 | RESOLVED | no | mutation 29b~29e가 원래 단계 순서를 보존한 채 transaction 경계만 늦춘다. fixture에서 Book 8권, block 10건, Assignment 27건의 실제 partial persistence가 각각 생겨 지정 전체 snapshot deep equality 테스트가 결정적으로 실패한다 |
+| R4-01 | RESOLVED | no | requirements 출처는 실제 bullet 6개이고 설명도 앞의 4개 사용자 요구·결정 + 뒤의 2개 mockup으로 정확하다 |
+| R4-02 | RESOLVED | no | seed mutation 8개와 `db:setup` mutation 2개, 총 10개가 본문·완료 보고에서 동일하게 열거되고 정상 케이스 30은 mutation으로 세지 않는다 |
+
+| Regression Finding | Codex Round 5 verdict | Result |
+|---|---|---|
+| DR-12 | RESOLVED 유지 | T03 네 DB artifact, 독립 기대값, journal sentinel, 24b-2, 개발 DB 4파일 보호 유지 |
+| RR-01 | RESOLVED 유지 | 여섯 출처, 조건 33건, MR-30, OPEN 0건 유지 |
+| RR-02 | RESOLVED 유지 | T01 ESLint FlatCompat 및 제공자 제거 mutation 유지 |
+| R2-01 | RESOLVED 유지 | 최소 48×48px 단일 값 유지 |
+| R2-02 | RESOLVED 유지 | 원자적 rollback·멱등 no-op·bulk-status 실패 사상 유지 |
+| R2-03 | RESOLVED 유지 | 시점 2건+범위 8건=10건 유지 |
+| R2-05 | RESOLVED 유지 | 기준일 2026-08-01과 밀린 과제 6건 계산 유지 |
+| R3-01 | RESOLVED 유지 | `{ date, to }`, 200/400/409/500, 9개 테스트와 rollback seam 유지 |
+| R3-02 | RESOLVED 유지 | 31+2=33, MR-30, 양방향 누락 0, OPEN 0 유지 |
+
+Round 5 신규 Finding은 없다. 태스크 판정은 **T01 PASS / T02 PASS / T03 PASS / T04 PASS / overall PASS**다. `open_implementation_details`는 0이고 구현 차단 Finding도 0이므로 `implementation_allowed`는 **true**다. 상세 근거는 `docs/reviews/DR-T01-T04-spec-rereview-round5.md`에 있다.
+
+다만 다음 작업은 구현 시작이 아니다. **사용자가 Round 5 결과를 확인하고 문서 브랜치 PR 생성을 승인한 뒤, CI 또는 문서 검증과 사용자 Merge 승인을 거쳐 `main`에 병합해야 한다.** 그 다음에만 T01 구현 브랜치를 만들 수 있다.
+
 ### Revision 3 — Claude 수정 (baseline `8b8c051`, 미커밋)
 
 **모든 항목의 상태는 `addressed_by_claude` / `pending_codex_verification`이다. RESOLVED 판정은 다음 Codex 독립 재검토에서만 나온다.**
@@ -302,8 +344,8 @@ All twelve are resolved. **No unapproved design assumption remains.**
 
 ## Gate
 
-`implementation_allowed` is `false`. Codex Round 4에서 R2-04의 구현 차단 P2가 남았으므로 구현을 시작할 수 없다. 이번 검토 작업에는 구현, package install, DB operation, branch change, commit, push, PR, merge, deployment가 포함되지 않았다.
+`implementation_allowed` is `true`. Codex Round 5에서 R2-04·R4-01·R4-02가 모두 RESOLVED됐고 회귀·신규 Finding·미결 구현 상세가 0건이므로 T01~T04 문서 구현 가능성 게이트를 통과했다.
 
-Claude revision 5가 끝났다. **다음 담당자는 Codex**이며, 다음 작업은 `be0d6b2` 이후 문서 변경에 대한 **Round 5 독립 재검토**다. R2-04 · R4-01 · R4-02는 전부 `addressed_by_claude` / `pending_codex_verification`이며, **작성자인 Claude는 어떤 Finding도 RESOLVED · PASS · CLOSED로 판정하지 않았고 `implementation_allowed`를 바꾸지 않았다.** 구현은 Codex의 판정 전까지 시작하지 않는다. Claude revision 3 · 4의 자기 보고와 Codex Round 2 · 3 · 4 기록은 과거 이력으로 보존했다.
+**다음 담당자는 사용자**다. Round 5 PASS 결과 확인 → 문서 브랜치 PR 생성 승인 → CI 또는 문서 검증 확인 → 사용자 Merge 승인 → `main` Merge 순서가 먼저다. Merge 뒤에만 T01 구현 브랜치를 만들고 Codex가 구현하며 Claude가 구현을 리뷰한다. `implementation_allowed: true`를 현재 문서 브랜치에서 즉시 구현을 시작해도 된다는 뜻으로 해석하지 않는다.
 
-이번 세션에서 구현은 시작하지 않았고 커밋 · 푸시 · PR · merge · 패키지 설치 · migration · seed · DB 실행도 하지 않았다.
+이번 세션에서 구현은 시작하지 않았고 브랜치 변경 · staging · commit · push · PR · merge · 패키지 설치 · test/build · migration · seed · DB 실행도 하지 않았다.
